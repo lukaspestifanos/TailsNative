@@ -1,0 +1,395 @@
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Dimensions,
+} from "react-native";
+import { Image } from "expo-image";
+import { useVideoPlayer, VideoView } from "expo-video";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import * as Haptics from "expo-haptics";
+import Svg, { Path } from "react-native-svg";
+import { useRoute, useNavigation } from "@react-navigation/native";
+import type { RouteProp } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import type { RootStackParamList } from "../navigation/AppNavigator";
+import { supabase } from "../lib/supabase";
+import { useAuth } from "../lib/AuthContext";
+import { colors, fontSize, spacing } from "../lib/theme";
+import { timeAgo } from "../lib/formatters";
+import { HammerIcon, TailIcon, CommentIcon } from "../components/Icons";
+
+const { width: SW, height: SH } = Dimensions.get("window");
+
+type Route = RouteProp<RootStackParamList, "VideoPost">;
+type Nav = NativeStackNavigationProp<RootStackParamList>;
+
+export default function VideoPostScreen() {
+  const { params } = useRoute<Route>();
+  const navigation = useNavigation<Nav>();
+  const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+
+  const [post, setPost] = useState<any>(null);
+  const [liked, setLiked] = useState(false);
+  const [likeCount, setLikeCount] = useState(0);
+  const [tailed, setTailed] = useState(false);
+  const [tailCount, setTailCount] = useState(0);
+  const [commentsCount, setCommentsCount] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [bottomHeight, setBottomHeight] = useState(200);
+
+  const player = useVideoPlayer(params.videoUrl, (p) => {
+    p.loop = true;
+    p.muted = false;
+  });
+
+  useEffect(() => {
+    const t = setTimeout(() => player.play(), 100);
+    return () => clearTimeout(t);
+  }, []);
+
+  useEffect(() => {
+    async function load() {
+      const { data: postData } = await supabase
+        .from("posts")
+        .select("id, user_id, content, created_at")
+        .eq("id", params.postId)
+        .single();
+      if (!postData) return;
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("username, name, avatar_url")
+        .eq("id", postData.user_id)
+        .single();
+
+      setPost({ ...postData, profiles: profile });
+
+      const [likesRes, tailsRes, commentsRes] = await Promise.all([
+        supabase.from("likes").select("*", { count: "exact", head: true }).eq("post_id", params.postId),
+        supabase.from("tails").select("*", { count: "exact", head: true }).eq("post_id", params.postId),
+        supabase.from("comments").select("*", { count: "exact", head: true }).eq("post_id", params.postId),
+      ]);
+      setLikeCount(likesRes.count ?? 0);
+      setTailCount(tailsRes.count ?? 0);
+      setCommentsCount(commentsRes.count ?? 0);
+
+      if (user) {
+        const [l, t] = await Promise.all([
+          supabase.from("likes").select("id").eq("post_id", params.postId).eq("user_id", user.id).maybeSingle(),
+          supabase.from("tails").select("id").eq("post_id", params.postId).eq("user_id", user.id).maybeSingle(),
+        ]);
+        setLiked(!!l.data);
+        setTailed(!!t.data);
+      }
+    }
+    load();
+  }, [params.postId]);
+
+  const handleLike = useCallback(async () => {
+    if (!user) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (liked) {
+      setLiked(false); setLikeCount((c) => c - 1);
+      await supabase.from("likes").delete().eq("post_id", params.postId).eq("user_id", user.id);
+    } else {
+      setLiked(true); setLikeCount((c) => c + 1);
+      await supabase.from("likes").insert({ post_id: params.postId, user_id: user.id });
+    }
+  }, [liked, user]);
+
+  const handleTail = useCallback(async () => {
+    if (!user) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (tailed) {
+      setTailed(false); setTailCount((c) => c - 1);
+      await supabase.from("tails").delete().eq("post_id", params.postId).eq("user_id", user.id);
+    } else {
+      setTailed(true); setTailCount((c) => c + 1);
+      await supabase.from("tails").insert({ post_id: params.postId, user_id: user.id });
+    }
+  }, [tailed, user]);
+
+  const togglePlayPause = () => {
+    if (paused) { player.play(); setPaused(false); }
+    else { player.pause(); setPaused(true); }
+  };
+
+  const toggleMute = () => {
+    const next = !muted;
+    player.muted = next;
+    setMuted(next);
+  };
+
+  return (
+    <View style={styles.container}>
+      {/* VIDEO — full screen, edge to edge, IS the background */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={togglePlayPause}>
+        <VideoView
+          player={player}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          nativeControls={false}
+        />
+      </Pressable>
+
+      {/* Gradient overlays for readability */}
+      <View style={styles.gradientTop} pointerEvents="none" />
+
+      {/* Pause icon — center of screen */}
+      {paused && (
+        <View style={styles.pauseCenter} pointerEvents="none">
+          <Svg width={56} height={56} viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)">
+            <Path d="M8 5v14l11-7z" />
+          </Svg>
+        </View>
+      )}
+
+      {/* TOP — back + more, over the video */}
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+        <Pressable onPress={() => navigation.goBack()} hitSlop={16} style={styles.topBtn}>
+          <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2.5} strokeLinecap="round">
+            <Path d="M19 12H5M12 19l-7-7 7-7" />
+          </Svg>
+        </Pressable>
+        <Pressable hitSlop={16} style={styles.topBtn}>
+          <Svg width={20} height={20} viewBox="0 0 24 24" fill="#fff">
+            <Path d="M12 8a2 2 0 110-4 2 2 0 010 4zM12 14a2 2 0 110-4 2 2 0 010 4zM12 20a2 2 0 110-4 2 2 0 010 4z" />
+          </Svg>
+        </Pressable>
+      </View>
+
+      {/* BOTTOM — author, caption, actions, controls — all over the video */}
+      <View
+        style={[styles.bottomOverlay, { paddingBottom: insets.bottom + 12 }]}
+        pointerEvents="box-none"
+        onLayout={(e) => setBottomHeight(e.nativeEvent.layout.height)}
+      >
+        {/* Author + caption */}
+        {post && (
+          <View style={styles.postInfo}>
+            <Pressable
+              style={styles.authorRow}
+              onPress={() => post.profiles?.username && navigation.navigate("UserProfile", { username: post.profiles.username })}
+            >
+              {post.profiles?.avatar_url ? (
+                <Image source={{ uri: post.profiles.avatar_url }} style={styles.avatar} contentFit="cover" />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarLetter}>{post.profiles?.username?.[0]?.toUpperCase() || "?"}</Text>
+                </View>
+              )}
+              <View>
+                <Text style={styles.name} numberOfLines={1}>
+                  {post.profiles?.name || post.profiles?.username || "anonymous"}
+                </Text>
+                <Text style={styles.username}>@{post.profiles?.username || "user"}</Text>
+              </View>
+              <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
+            </Pressable>
+
+            {post.content ? (
+              <Text style={styles.caption} numberOfLines={3}>{post.content}</Text>
+            ) : null}
+          </View>
+        )}
+
+        {/* Actions — hammer, tail, comment */}
+        <View style={styles.actions}>
+          <Pressable onPress={handleLike} style={styles.actionBtn} hitSlop={8}>
+            <HammerIcon size={22} color={liked ? colors.emerald : "#fff"} filled={liked} />
+            {likeCount > 0 && <Text style={[styles.actionCount, liked && styles.activeCount]}>{likeCount}</Text>}
+          </Pressable>
+
+          <Pressable onPress={handleTail} style={styles.actionBtn} hitSlop={8}>
+            <TailIcon size={22} color={tailed ? colors.emerald : "#fff"} />
+            {tailCount > 0 && <Text style={[styles.actionCount, tailed && styles.activeCount]}>{tailCount}</Text>}
+          </Pressable>
+
+          <Pressable onPress={() => navigation.navigate("PostDetail", { postId: params.postId })} style={styles.actionBtn} hitSlop={8}>
+            <CommentIcon size={22} color="#fff" />
+            {commentsCount > 0 && <Text style={styles.actionCount}>{commentsCount}</Text>}
+          </Pressable>
+        </View>
+
+        {/* Controls — play/pause left, mute right */}
+        <View style={styles.controls}>
+          <Pressable onPress={togglePlayPause} hitSlop={12}>
+            {paused ? (
+              <Svg width={24} height={24} viewBox="0 0 24 24" fill="#fff">
+                <Path d="M8 5v14l11-7z" />
+              </Svg>
+            ) : (
+              <Svg width={24} height={24} viewBox="0 0 24 24" fill="#fff">
+                <Path d="M6 4h4v16H6zM14 4h4v16h-4z" />
+              </Svg>
+            )}
+          </Pressable>
+
+          <View style={{ flex: 1 }} />
+
+          <Pressable onPress={toggleMute} hitSlop={12}>
+            {muted ? (
+              <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2}>
+                <Path d="M11 5L6 9H2v6h4l5 4V5z" />
+                <Path d="M23 9l-6 6M17 9l6 6" />
+              </Svg>
+            ) : (
+              <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2}>
+                <Path d="M11 5L6 9H2v6h4l5 4V5z" />
+                <Path d="M19.07 4.93a10 10 0 010 14.14M15.54 8.46a5 5 0 010 7.07" />
+              </Svg>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+
+  // Gradient overlays for text readability over video
+  gradientTop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 120,
+    backgroundColor: "transparent",
+    // Fake gradient with layered opacity
+    borderBottomWidth: 0,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 60 },
+    shadowOpacity: 0.8,
+    shadowRadius: 40,
+  },
+  gradientBottom: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "rgba(0,0,0,0.55)",
+  },
+
+  // Pause overlay center
+  pauseCenter: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Top bar — over video
+  topBar: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    zIndex: 10,
+  },
+  topBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Bottom overlay — over video
+  bottomOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: spacing.lg,
+    zIndex: 10,
+  },
+
+  // Post info
+  postInfo: {
+    marginBottom: spacing.md,
+  },
+  authorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  avatar: { width: 36, height: 36, borderRadius: 18 },
+  avatarFallback: {
+    width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(255,255,255,0.15)",
+    alignItems: "center", justifyContent: "center",
+  },
+  avatarLetter: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  name: {
+    fontSize: fontSize.md,
+    fontWeight: "800",
+    color: "#fff",
+    textShadowColor: "rgba(0,0,0,0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  username: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.85)",
+    marginTop: 1,
+    textShadowColor: "rgba(0,0,0,0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  time: {
+    fontSize: fontSize.xs,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.7)",
+    marginLeft: "auto",
+    textShadowColor: "rgba(0,0,0,0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  caption: {
+    fontSize: fontSize.md,
+    fontWeight: "600",
+    color: "#fff",
+    lineHeight: 22,
+    textShadowColor: "rgba(0,0,0,0.9)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 6,
+  },
+
+  // Actions
+  actions: {
+    flexDirection: "row",
+    gap: spacing.xxl,
+    marginBottom: spacing.md,
+  },
+  actionBtn: { flexDirection: "row", alignItems: "center", gap: 6 },
+  actionCount: {
+    fontSize: fontSize.sm,
+    fontWeight: "700",
+    color: "#fff",
+    textShadowColor: "rgba(0,0,0,0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  activeCount: { color: colors.emerald },
+
+  // Controls bar
+  controls: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+});
