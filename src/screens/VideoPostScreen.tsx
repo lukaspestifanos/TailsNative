@@ -7,6 +7,9 @@ import {
   Dimensions,
   GestureResponderEvent,
   LayoutChangeEvent,
+  Alert,
+  Share,
+  Animated as RNAnimated,
 } from "react-native";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -160,6 +163,38 @@ export default function VideoPostScreen() {
     }
   }, [tailed, user]);
 
+  // 3-dot menu
+  const [showMenu, setShowMenu] = useState(false);
+  const menuAnim = useRef(new RNAnimated.Value(0)).current;
+  const isOwn = post?.user_id === user?.id;
+
+  const openMenu = useCallback(() => {
+    setShowMenu(true);
+    menuAnim.setValue(0);
+    RNAnimated.spring(menuAnim, { toValue: 1, tension: 300, friction: 20, useNativeDriver: true }).start();
+  }, [menuAnim]);
+
+  const handleShare = useCallback(async () => {
+    setShowMenu(false);
+    try {
+      await Share.share({ url: `https://www.tails.social/post/${params.postId}`, message: `https://www.tails.social/post/${params.postId}` });
+    } catch {}
+  }, [params.postId]);
+
+  const handleDelete = useCallback(() => {
+    setShowMenu(false);
+    Alert.alert("Delete Post", "This can't be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete", style: "destructive", onPress: async () => {
+          if (!user) return;
+          await supabase.from("posts").delete().eq("id", params.postId).eq("user_id", user.id);
+          navigation.goBack();
+        },
+      },
+    ]);
+  }, [user, params.postId, navigation]);
+
   const togglePlayPause = () => {
     if (paused) { player.play(); setPaused(false); }
     else { player.pause(); setPaused(true); }
@@ -202,12 +237,48 @@ export default function VideoPostScreen() {
             <Path d="M19 12H5M12 19l-7-7 7-7" />
           </Svg>
         </Pressable>
-        <Pressable hitSlop={16} style={styles.topBtn}>
+        <Pressable onPress={openMenu} hitSlop={16} style={styles.topBtn}>
           <Svg width={20} height={20} viewBox="0 0 24 24" fill="#fff">
             <Path d="M12 8a2 2 0 110-4 2 2 0 010 4zM12 14a2 2 0 110-4 2 2 0 010 4zM12 20a2 2 0 110-4 2 2 0 010 4z" />
           </Svg>
         </Pressable>
       </View>
+
+      {/* 3-dot menu overlay */}
+      {showMenu && (
+        <>
+          <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)} />
+          <RNAnimated.View style={[
+            styles.menu,
+            { top: insets.top + 8 + 44 },
+            {
+              opacity: menuAnim,
+              transform: [
+                { scale: menuAnim.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) },
+                { translateY: menuAnim.interpolate({ inputRange: [0, 1], outputRange: [-4, 0] }) },
+              ],
+            },
+          ]}>
+            <Pressable
+              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+              onPress={handleShare}
+            >
+              <Text style={styles.menuText}>Share</Text>
+            </Pressable>
+            {isOwn && (
+              <>
+                <View style={styles.menuDivider} />
+                <Pressable
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                  onPress={handleDelete}
+                >
+                  <Text style={styles.menuTextDanger}>Delete post</Text>
+                </Pressable>
+              </>
+            )}
+          </RNAnimated.View>
+        </>
+      )}
 
       {/* BOTTOM — author, caption, actions, controls — all over the video */}
       <View
@@ -494,4 +565,34 @@ const styles = StyleSheet.create({
     fontVariant: ["tabular-nums"],
     minWidth: 38,
   },
+
+  // 3-dot menu
+  menuBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+  },
+  menu: {
+    position: "absolute",
+    right: spacing.lg,
+    zIndex: 60,
+    backgroundColor: "rgba(24,24,27,0.95)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(63,63,70,0.6)",
+    minWidth: 160,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  menuItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  menuItemPressed: { backgroundColor: "rgba(63,63,70,0.5)" },
+  menuDivider: { height: StyleSheet.hairlineWidth, backgroundColor: "rgba(63,63,70,0.6)" },
+  menuText: { fontSize: 14, color: "#fff", fontWeight: "500" },
+  menuTextDanger: { fontSize: 14, color: "#f87171", fontWeight: "500" },
 });

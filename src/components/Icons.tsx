@@ -113,6 +113,15 @@ export function ChevronRight({ size = 16, color }: IconProps) {
   );
 }
 
+export function SearchIcon({ size = 22, color }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <Circle cx="11" cy="11" r="8" />
+      <Path d="M21 21l-4.35-4.35" />
+    </Svg>
+  );
+}
+
 export function PlusIcon({ size = 22, color }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round">

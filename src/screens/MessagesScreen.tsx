@@ -8,10 +8,11 @@ import {
   RefreshControl,
   AppState,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/AppNavigator";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
@@ -138,6 +139,11 @@ export default function MessagesScreen() {
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [loadConversations, user, isGuest]);
 
+  // Refetch when screen regains focus (e.g. after leaving a conversation)
+  useFocusEffect(useCallback(() => {
+    if (user && !isGuest) loadConversations(true);
+  }, [loadConversations, user, isGuest]));
+
   // Pause/resume on app state
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
@@ -156,6 +162,19 @@ export default function MessagesScreen() {
     await loadConversations();
     setRefreshing(false);
   }, [loadConversations]);
+
+  const handleDeleteConvo = useCallback((convoId: string, displayName: string) => {
+    Alert.alert("Delete Conversation", `Remove "${displayName}" from your messages?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete", style: "destructive", onPress: async () => {
+          if (!user) return;
+          await supabase.from("conversation_participants").delete().eq("conversation_id", convoId).eq("user_id", user.id);
+          setConversations((prev) => prev.filter((c) => c.id !== convoId));
+        },
+      },
+    ]);
+  }, [user]);
 
   // Sign-in prompt for guests / unauthenticated
   if (!session || isGuest) {
@@ -238,6 +257,8 @@ export default function MessagesScreen() {
                 pressed && styles.convoRowPressed,
               ]}
               onPress={() => navigation.navigate("Conversation", { conversationId: convo.id })}
+              onLongPress={() => handleDeleteConvo(convo.id, displayName)}
+              delayLongPress={400}
             >
               {/* Avatar */}
               {convo.type === "group" && otherUsers.length > 1 ? (

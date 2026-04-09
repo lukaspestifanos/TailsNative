@@ -20,6 +20,7 @@ import { useAuth } from "../lib/AuthContext";
 import type { Post } from "../lib/types";
 import PostCard from "../components/PostCard";
 import { FeedSkeleton } from "../components/Skeleton";
+import FloatingComposeButton from "../components/FloatingComposeButton";
 
 type FeedTab = "foryou" | "following";
 
@@ -337,6 +338,7 @@ export default function FeedScreen() {
           )
         }
       />
+      <FloatingComposeButton />
     </SafeAreaView>
   );
 }

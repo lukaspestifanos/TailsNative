@@ -12,6 +12,9 @@ import {
   AppState,
   Animated,
   useWindowDimensions,
+  Modal,
+  Alert,
+  ScrollView,
 } from "react-native";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
@@ -91,6 +94,88 @@ function isConsecutive(curr: Message, prev: Message | null): boolean {
   return new Date(curr.created_at).getTime() - new Date(prev.created_at).getTime() < 120000;
 }
 
+// Stacked avatar ring for header — matches DM list group avatar style
+function HeaderAvatars({ participants }: { participants: { id: string; username: string; avatar_url: string | null }[] }) {
+  const count = participants.length;
+
+  if (count === 1) {
+    const p = participants[0];
+    return p.avatar_url ? (
+      <Image source={{ uri: p.avatar_url }} style={ha.single} contentFit="cover" transition={0} />
+    ) : (
+      <View style={ha.singleFallback}>
+        <Text style={ha.singleLetter}>{p.username?.[0]?.toUpperCase() || "?"}</Text>
+      </View>
+    );
+  }
+
+  // 2+ participants — overlapping ring
+  const shown = participants.slice(0, 3);
+  const avatarSize = count === 2 ? 22 : 18;
+  const ringSize = 34;
+  const angleOffset = -Math.PI / 2; // start at top
+  const r = (ringSize - avatarSize) / 2;
+
+  return (
+    <View style={[ha.ring, { width: ringSize, height: ringSize }]}>
+      {shown.map((p, i) => {
+        const angle = angleOffset + (i / shown.length) * 2 * Math.PI;
+        const x = ringSize / 2 + r * Math.cos(angle) - avatarSize / 2;
+        const y = ringSize / 2 + r * Math.sin(angle) - avatarSize / 2;
+        return (
+          <View key={p.id} style={[ha.avatarWrap, { width: avatarSize, height: avatarSize, borderRadius: avatarSize / 2, left: x, top: y }]}>
+            {p.avatar_url ? (
+              <Image source={{ uri: p.avatar_url }} style={{ width: avatarSize - 2, height: avatarSize - 2, borderRadius: (avatarSize - 2) / 2 }} contentFit="cover" transition={0} />
+            ) : (
+              <View style={[ha.fallback, { width: avatarSize - 2, height: avatarSize - 2, borderRadius: (avatarSize - 2) / 2 }]}>
+                <Text style={{ fontSize: avatarSize * 0.38, fontWeight: "700", color: colors.emerald }}>{p.username?.[0]?.toUpperCase() || "?"}</Text>
+              </View>
+            )}
+          </View>
+        );
+      })}
+      {count > 3 && (
+        <View style={[ha.overflow, { right: -2, bottom: -2 }]}>
+          <Text style={ha.overflowText}>+{count - 3}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const ha = StyleSheet.create({
+  single: { width: 30, height: 30, borderRadius: 15 },
+  singleFallback: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: colors.cardHover, alignItems: "center", justifyContent: "center",
+  },
+  singleLetter: { fontSize: 12, fontWeight: "700", color: colors.emerald },
+  ring: { position: "relative" },
+  avatarWrap: {
+    position: "absolute",
+    borderWidth: 1.5,
+    borderColor: colors.bg,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  fallback: {
+    backgroundColor: colors.cardHover,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  overflow: {
+    position: "absolute",
+    backgroundColor: colors.cardHover,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    paddingVertical: 1,
+    borderWidth: 1,
+    borderColor: colors.bg,
+  },
+  overflowText: { fontSize: 8, fontWeight: "700", color: colors.textMuted },
+});
+
 export default function ConversationScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -131,6 +216,13 @@ export default function ConversationScreen() {
   // Conversation name for group settings
   const [convoName, setConvoName] = useState<string | null>(null);
 
+  // Group info modal
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
+  const [addSearch, setAddSearch] = useState("");
+  const [addResults, setAddResults] = useState<Participant[]>([]);
+  const [addSearching, setAddSearching] = useState(false);
+  const addTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const maxBubbleWidth = screenWidth * 0.72;
 
   // ── Load conversation ──
@@ -150,6 +242,11 @@ export default function ConversationScreen() {
       const others = (profiles || []).filter((p: any) => p.id !== user.id);
       navigation.setOptions({
         headerTitle: convo.type === "group" && convo.name ? convo.name : others.map((p: any) => p.username).join(", ") || "Chat",
+        headerRight: () => (
+          <Pressable onPress={() => setShowGroupInfo(true)} hitSlop={8}>
+            <HeaderAvatars participants={others.length > 0 ? others : (profiles || [])} />
+          </Pressable>
+        ),
       });
 
       const { data: msgs } = await supabase.from("messages").select("id, sender_id, content, image_url, created_at").eq("conversation_id", convoId).order("created_at", { ascending: true }).limit(200);
@@ -347,6 +444,81 @@ export default function ConversationScreen() {
   }, [user, convoId, sending]);
 
   const profileMap = new Map(participants.map((p) => [p.id, p]));
+
+  // ── Group info handlers (must be before early returns) ──
+  const handleLeaveGroup = useCallback(() => {
+    Alert.alert("Leave Conversation", "Are you sure you want to leave?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Leave", style: "destructive", onPress: async () => {
+          if (!user) return;
+          await supabase.from("conversation_participants").delete().eq("conversation_id", convoId).eq("user_id", user.id);
+          await supabase.from("messages").insert({
+            conversation_id: convoId,
+            sender_id: user.id,
+            content: `::system::${participants.find((p) => p.id === user.id)?.username || "User"} left the conversation`,
+          });
+          setShowGroupInfo(false);
+          navigation.goBack();
+        },
+      },
+    ]);
+  }, [user, convoId, participants, navigation]);
+
+  const handleRemoveMember = useCallback((memberId: string, memberUsername: string) => {
+    Alert.alert("Remove Member", `Remove @${memberUsername}?`, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove", style: "destructive", onPress: async () => {
+          if (!user) return;
+          await supabase.from("conversation_participants").delete().eq("conversation_id", convoId).eq("user_id", memberId);
+          await supabase.from("messages").insert({
+            conversation_id: convoId,
+            sender_id: user.id,
+            content: `::system::${memberUsername} was removed from the conversation`,
+          });
+          setParticipants((prev) => prev.filter((p) => p.id !== memberId));
+        },
+      },
+    ]);
+  }, [user, convoId]);
+
+  const handleAddMember = useCallback(async (profile: Participant) => {
+    if (!user) return;
+    if (participants.some((p) => p.id === profile.id)) return;
+    await supabase.from("conversation_participants").insert({ conversation_id: convoId, user_id: profile.id });
+    await supabase.from("messages").insert({
+      conversation_id: convoId,
+      sender_id: user.id,
+      content: `::system::${profile.username} was added to the conversation`,
+    });
+    setParticipants((prev) => [...prev, profile]);
+    setAddSearch("");
+    setAddResults([]);
+  }, [user, convoId, participants]);
+
+  // Search for people to add
+  useEffect(() => {
+    const q = addSearch.trim();
+    if (!q || !user) {
+      setAddResults([]);
+      return;
+    }
+    setAddSearching(true);
+    if (addTimer.current) clearTimeout(addTimer.current);
+    addTimer.current = setTimeout(async () => {
+      const cleaned = q.replace(/^@/, "");
+      const { data: results } = await supabase
+        .from("profiles")
+        .select("id, username, avatar_url")
+        .ilike("username", `${cleaned}%`)
+        .not("id", "in", `(${participants.map((p) => p.id).join(",")})`)
+        .limit(8);
+      setAddResults((results as Participant[]) || []);
+      setAddSearching(false);
+    }, 250);
+    return () => { if (addTimer.current) clearTimeout(addTimer.current); };
+  }, [addSearch, user, participants]);
 
   if (loading) return <View style={st.container}><ActivityIndicator color={colors.emerald} style={{ marginTop: 80 }} /></View>;
 
@@ -632,6 +804,94 @@ export default function ConversationScreen() {
           </View>
         </Pressable>
       )}
+      {/* Group info modal */}
+      <Modal visible={showGroupInfo} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowGroupInfo(false)}>
+        <View style={st.giContainer}>
+          {/* Header */}
+          <View style={st.giHeader}>
+            <Text style={st.giTitle}>{convoType === "group" ? "Group Info" : "Conversation"}</Text>
+            <Pressable onPress={() => { setShowGroupInfo(false); setAddSearch(""); setAddResults([]); }} hitSlop={12}>
+              <Text style={st.giDone}>Done</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+            {/* Group name */}
+            {convoName && (
+              <View style={st.giSection}>
+                <Text style={st.giSectionTitle}>Name</Text>
+                <Text style={st.giGroupName}>{convoName}</Text>
+              </View>
+            )}
+
+            {/* Members */}
+            <View style={st.giSection}>
+              <Text style={st.giSectionTitle}>Members ({participants.length})</Text>
+              {participants.map((p) => {
+                const isMe = p.id === user?.id;
+                return (
+                  <View key={p.id} style={st.giMemberRow}>
+                    {p.avatar_url ? (
+                      <Image source={{ uri: p.avatar_url }} style={st.giAvatar} contentFit="cover" transition={0} />
+                    ) : (
+                      <View style={st.giAvatarFallback}>
+                        <Text style={st.giAvatarLetter}>{p.username?.[0]?.toUpperCase() || "?"}</Text>
+                      </View>
+                    )}
+                    <Pressable
+                      style={{ flex: 1 }}
+                      onPress={() => { setShowGroupInfo(false); navigation.push("UserProfile", { username: p.username }); }}
+                    >
+                      <Text style={st.giUsername}>@{p.username}{isMe ? " (you)" : ""}</Text>
+                    </Pressable>
+                    {convoType === "group" && !isMe && (
+                      <Pressable onPress={() => handleRemoveMember(p.id, p.username)} hitSlop={8}>
+                        <Text style={st.giRemove}>Remove</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Add people */}
+            {convoType === "group" && (
+              <View style={st.giSection}>
+                <Text style={st.giSectionTitle}>Add People</Text>
+                <TextInput
+                  style={st.giSearchInput}
+                  value={addSearch}
+                  onChangeText={setAddSearch}
+                  placeholder="Search by username..."
+                  placeholderTextColor={colors.textDim}
+                  autoCorrect={false}
+                />
+                {addSearching && <ActivityIndicator color={colors.emerald} size="small" style={{ marginTop: 8 }} />}
+                {addResults.map((p) => (
+                  <Pressable key={p.id} style={st.giMemberRow} onPress={() => handleAddMember(p)}>
+                    {p.avatar_url ? (
+                      <Image source={{ uri: p.avatar_url }} style={st.giAvatar} contentFit="cover" transition={0} />
+                    ) : (
+                      <View style={st.giAvatarFallback}>
+                        <Text style={st.giAvatarLetter}>{p.username?.[0]?.toUpperCase() || "?"}</Text>
+                      </View>
+                    )}
+                    <Text style={st.giUsername}>@{p.username}</Text>
+                    <Text style={st.giAdd}>Add</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
+            {/* Leave */}
+            <View style={st.giSection}>
+              <Pressable style={st.giLeaveBtn} onPress={handleLeaveGroup}>
+                <Text style={st.giLeaveText}>Leave Conversation</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -812,4 +1072,72 @@ const st = StyleSheet.create({
   empty: { paddingVertical: 80, alignItems: "center", gap: 4 },
   emptyTitle: { fontSize: fontSize.md, fontWeight: "600", color: colors.textMuted },
   emptySub: { fontSize: fontSize.sm, color: colors.textDim },
+
+  // Group info modal
+  giContainer: { flex: 1, backgroundColor: colors.bg },
+  giHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  giTitle: { fontSize: fontSize.lg, fontWeight: "700", color: colors.text },
+  giDone: { fontSize: fontSize.md, fontWeight: "600", color: colors.emerald },
+  giSection: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
+  },
+  giSectionTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: "700",
+    color: colors.textDim,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: spacing.sm,
+  },
+  giGroupName: {
+    fontSize: fontSize.md,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  giMemberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  giAvatar: { width: 36, height: 36, borderRadius: 18 },
+  giAvatarFallback: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: colors.cardHover,
+    alignItems: "center", justifyContent: "center",
+  },
+  giAvatarLetter: { fontSize: 14, fontWeight: "700", color: colors.emerald },
+  giUsername: { fontSize: fontSize.md, fontWeight: "500", color: colors.text, flex: 1 },
+  giRemove: { fontSize: fontSize.xs, fontWeight: "600", color: colors.red },
+  giAdd: { fontSize: fontSize.xs, fontWeight: "600", color: colors.emerald },
+  giSearchInput: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: fontSize.sm,
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  giLeaveBtn: {
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  giLeaveText: { fontSize: fontSize.md, fontWeight: "600", color: colors.red },
 });

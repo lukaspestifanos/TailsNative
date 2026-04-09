@@ -481,43 +481,43 @@ export default function PostDetailScreen() {
         showsVerticalScrollIndicator={false}
       />
 
-      {/* Mention autocomplete — above input bar */}
-      <MentionAutocomplete
-        text={commentText}
-        cursorPosition={commentCursor}
-        onSelect={handleCommentMentionSelect}
-      />
-
-      {/* Comment input — pinned to bottom */}
-      <View style={styles.inputBar}>
-        {replyingTo && (
-          <View style={styles.replyIndicator}>
-            <Text style={styles.replyText}>Replying to <Text style={styles.replyUsername}>@{replyingTo.username}</Text></Text>
-            <Pressable onPress={() => setReplyingTo(null)}>
-              <Text style={styles.replyCancel}>Cancel</Text>
+      {/* Comment input — pinned to bottom, with floating mention autocomplete */}
+      <View style={styles.inputBarWrapper}>
+        <MentionAutocomplete
+          text={commentText}
+          cursorPosition={commentCursor}
+          onSelect={handleCommentMentionSelect}
+        />
+        <View style={styles.inputBar}>
+          {replyingTo && (
+            <View style={styles.replyIndicator}>
+              <Text style={styles.replyText}>Replying to <Text style={styles.replyUsername}>@{replyingTo.username}</Text></Text>
+              <Pressable onPress={() => setReplyingTo(null)}>
+                <Text style={styles.replyCancel}>Cancel</Text>
+              </Pressable>
+            </View>
+          )}
+          <View style={styles.inputRow}>
+            <TextInput
+              ref={inputRef}
+              style={styles.input}
+              value={commentText}
+              onChangeText={setCommentText}
+              onSelectionChange={(e) => setCommentCursor(e.nativeEvent.selection.end)}
+              placeholder={replyingTo ? `Reply to @${replyingTo.username}...` : "Add a comment..."}
+              placeholderTextColor={colors.textMuted}
+              maxLength={500}
+              returnKeyType="send"
+              onSubmitEditing={handleComment}
+            />
+            <Pressable
+              onPress={handleComment}
+              disabled={!commentText.trim() || submitting}
+              style={[styles.sendBtn, (!commentText.trim() || submitting) && styles.sendBtnDisabled]}
+            >
+              <Text style={styles.sendBtnText}>{submitting ? "..." : "Post"}</Text>
             </Pressable>
           </View>
-        )}
-        <View style={styles.inputRow}>
-          <TextInput
-            ref={inputRef}
-            style={styles.input}
-            value={commentText}
-            onChangeText={setCommentText}
-            onSelectionChange={(e) => setCommentCursor(e.nativeEvent.selection.end)}
-            placeholder={replyingTo ? `Reply to @${replyingTo.username}...` : "Add a comment..."}
-            placeholderTextColor={colors.textMuted}
-            maxLength={500}
-            returnKeyType="send"
-            onSubmitEditing={handleComment}
-          />
-          <Pressable
-            onPress={handleComment}
-            disabled={!commentText.trim() || submitting}
-            style={[styles.sendBtn, (!commentText.trim() || submitting) && styles.sendBtnDisabled]}
-          >
-            <Text style={styles.sendBtnText}>{submitting ? "..." : "Post"}</Text>
-          </Pressable>
         </View>
       </View>
 
@@ -717,6 +717,10 @@ const styles = StyleSheet.create({
   emptyText: { color: colors.textMuted, fontSize: fontSize.md },
 
   // Input bar
+  inputBarWrapper: {
+    position: "relative",
+    zIndex: 50,
+  },
   inputBar: {
     borderTopWidth: 1,
     borderTopColor: colors.border,

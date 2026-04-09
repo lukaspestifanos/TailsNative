@@ -62,33 +62,35 @@ export default function MentionAutocomplete({ text, cursorPosition, onSelect }: 
   if (!loading && results.length === 0) return null;
 
   return (
-    <View style={s.container}>
-      {loading ? (
-        <View style={s.loadingRow}>
-          <ActivityIndicator size="small" color={colors.emerald} />
-          <Text style={s.loadingText}>Searching...</Text>
-        </View>
-      ) : (
-        results.map((profile) => (
-          <Pressable
-            key={profile.username}
-            style={({ pressed }) => [s.row, pressed && s.rowPressed]}
-            onPress={() => onSelect(profile.username)}
-          >
-            {profile.avatar_url ? (
-              <Image source={{ uri: profile.avatar_url }} style={s.avatar} contentFit="cover" transition={0} />
-            ) : (
-              <View style={s.avatarFallback}>
-                <Text style={s.avatarLetter}>{profile.username[0]?.toUpperCase() ?? "?"}</Text>
+    <View style={s.wrapper}>
+      <View style={s.container}>
+        {loading ? (
+          <View style={s.loadingRow}>
+            <ActivityIndicator size="small" color={colors.emerald} />
+            <Text style={s.loadingText}>Searching...</Text>
+          </View>
+        ) : (
+          results.map((profile) => (
+            <Pressable
+              key={profile.username}
+              style={({ pressed }) => [s.row, pressed && s.rowPressed]}
+              onPress={() => onSelect(profile.username)}
+            >
+              {profile.avatar_url ? (
+                <Image source={{ uri: profile.avatar_url }} style={s.avatar} contentFit="cover" transition={0} />
+              ) : (
+                <View style={s.avatarFallback}>
+                  <Text style={s.avatarLetter}>{profile.username[0]?.toUpperCase() ?? "?"}</Text>
+                </View>
+              )}
+              <View style={s.info}>
+                <Text style={s.name} numberOfLines={1}>{profile.name || profile.username}</Text>
+                {profile.name && <Text style={s.username}>@{profile.username}</Text>}
               </View>
-            )}
-            <View style={s.info}>
-              <Text style={s.name} numberOfLines={1}>{profile.name || profile.username}</Text>
-              {profile.name && <Text style={s.username}>@{profile.username}</Text>}
-            </View>
-          </Pressable>
-        ))
-      )}
+            </Pressable>
+          ))
+        )}
+      </View>
     </View>
   );
 }
@@ -96,14 +98,27 @@ export default function MentionAutocomplete({ text, cursorPosition, onSelect }: 
 export { extractMentionQuery };
 
 const s = StyleSheet.create({
+  wrapper: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: "100%",
+    zIndex: 50,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.xs,
+  },
   container: {
     backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.borderLight,
     borderRadius: radius.md,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.xs,
     overflow: "hidden",
+    // Shadow for elevation
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 10,
   },
   loadingRow: {
     flexDirection: "row",

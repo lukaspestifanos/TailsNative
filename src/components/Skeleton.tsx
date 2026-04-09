@@ -273,6 +273,68 @@ const notifStyles = StyleSheet.create({
   thumb: { width: 40, height: 40, borderRadius: radius.sm },
 });
 
+// Game picker skeleton — matches ComposeScreen game picker cards
+export function GamePickerSkeleton() {
+  return (
+    <View style={gpStyles.container}>
+      {[0, 1, 2].map((section) => (
+        <View key={section}>
+          {/* League header */}
+          <View style={gpStyles.leagueHeader}>
+            <Bone style={{ width: 60 + section * 20, height: 10, borderRadius: 4 }} />
+            <Bone style={{ width: 14, height: 10, borderRadius: 4 }} />
+          </View>
+          {/* Game cards */}
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={gpStyles.gameCard}>
+              <View style={gpStyles.teamCol}>
+                <Bone style={gpStyles.logo} />
+                <Bone style={{ width: 48 + (i % 2) * 16, height: 8, borderRadius: 4 }} />
+              </View>
+              <View style={gpStyles.center}>
+                <Bone style={{ width: 32, height: 12, borderRadius: 4 }} />
+                <Bone style={{ width: 24, height: 8, borderRadius: 4, marginTop: 4 }} />
+              </View>
+              <View style={gpStyles.teamCol}>
+                <Bone style={gpStyles.logo} />
+                <Bone style={{ width: 52 + (i % 3) * 12, height: 8, borderRadius: 4 }} />
+              </View>
+            </View>
+          ))}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const gpStyles = StyleSheet.create({
+  container: { paddingTop: spacing.xs },
+  leagueHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    backgroundColor: "rgba(39,39,42,0.3)",
+  },
+  gameCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: spacing.md,
+    marginVertical: 3,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  teamCol: { flex: 1, alignItems: "center", gap: 6 },
+  center: { alignItems: "center", minWidth: 60 },
+  logo: { width: 28, height: 28, borderRadius: 14 },
+});
+
 const styles = StyleSheet.create({
   bone: {
     backgroundColor: colors.skeleton1,

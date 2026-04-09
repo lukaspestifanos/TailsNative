@@ -26,6 +26,7 @@ import { API_BASE, supabase } from "../lib/supabase";
 import { useAuth } from "../lib/AuthContext";
 import { CloseIcon, ImageIcon, GamesIcon } from "../components/Icons";
 import MentionAutocomplete, { extractMentionQuery } from "../components/MentionAutocomplete";
+import { GamePickerSkeleton } from "../components/Skeleton";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<RootStackParamList, "Compose">;
@@ -80,6 +81,8 @@ export default function ComposeScreen() {
   const charCount = content.length;
   const MAX_CHARS = 500;
 
+  const [espnLoading, setEspnLoading] = useState(false);
+
   // Prefetch games immediately so picker is instant
   useEffect(() => { fetchGames(); }, []);
 
@@ -91,11 +94,29 @@ export default function ComposeScreen() {
     }
   }, [route.params?.gameId, games]);
 
-  // Prefetch games on mount — API + extended ESPN for sparse sports
+  // Deduplicate helper
+  const deduplicateGames = useCallback((allGames: GameItem[]) => {
+    const dedupKey = (g: GameItem) => {
+      const day = g.start_time ? g.start_time.slice(0, 10) : "";
+      return `${g.league}|${g.home_team}|${g.away_team}|${day}`.toLowerCase();
+    };
+    const seen = new Set<string>();
+    const result: GameItem[] = [];
+    for (const g of allGames) {
+      const key = dedupKey(g);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(g);
+    }
+    return result;
+  }, []);
+
+  // Prefetch games on mount — Phase 1: API (fast), Phase 2: ESPN extended (background)
   const fetchGames = useCallback(async () => {
     if (games.length > 0) return;
     setGamesLoading(true);
     try {
+      // Phase 1 — fetch from API (one request, fast)
       const res = await fetch(`${API_BASE}/api/games/today?_t=${Date.now()}`);
       if (!res.ok) return;
       const data = await res.json();
@@ -107,15 +128,21 @@ export default function ComposeScreen() {
         ...(data.soccer || []),
         ...(data.tennis || []),
       ];
+
+      // Show API games immediately
+      setGames(apiGames);
+      setGamesLoading(false);
+
+      // Phase 2 — fetch extended ESPN games in background
+      setEspnLoading(true);
       const apiIds = new Set(apiGames.map((g) => g.id));
 
-      // Extended ESPN fetch for soccer + NCAAM (72h back, 7 days forward)
       const makeDateStr = (offset: number) => {
         const d = new Date(Date.now() + offset * 24 * 60 * 60 * 1000);
         return d.toISOString().slice(0, 10).replace(/-/g, "");
       };
       const extDates: string[] = [];
-      for (let i = -3; i <= 7; i++) extDates.push(makeDateStr(i));
+      for (let i = -1; i <= 4; i++) extDates.push(makeDateStr(i));
 
       const extEndpoints = [
         { path: "soccer/eng.1", league: "Premier League" },
@@ -174,23 +201,14 @@ export default function ComposeScreen() {
         )
       );
 
-      // Deduplicate — API and ESPN can return the same game with different IDs
-      const dedupKey = (g: GameItem) => {
-        const day = g.start_time ? g.start_time.slice(0, 10) : "";
-        return `${g.league}|${g.home_team}|${g.away_team}|${day}`.toLowerCase();
-      };
-      const seen = new Set<string>();
-      const merged: GameItem[] = [];
-      for (const g of [...apiGames, ...espnGames]) {
-        const key = dedupKey(g);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        merged.push(g);
-      }
-      setGames(merged);
-    } catch {}
-    setGamesLoading(false);
-  }, [games.length]);
+      // Merge ESPN games with API games
+      setGames((prev) => deduplicateGames([...prev, ...espnGames]));
+      setEspnLoading(false);
+    } catch {
+      setGamesLoading(false);
+      setEspnLoading(false);
+    }
+  }, [games.length, deduplicateGames]);
 
   // Pick media from library
   const pickMedia = useCallback(async () => {
@@ -303,6 +321,7 @@ export default function ComposeScreen() {
 
   // Player-to-team lookup: search ESPN for athlete names, collect their team names
   const [playerTeams, setPlayerTeams] = useState<string[]>([]);
+  const [playerSearching, setPlayerSearching] = useState(false);
   const playerSearchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -310,6 +329,7 @@ export default function ComposeScreen() {
     const q = gameSearch.trim().toLowerCase();
     if (!q || q.length < 2) {
       setPlayerTeams([]);
+      setPlayerSearching(false);
       return;
     }
 
@@ -322,25 +342,38 @@ export default function ComposeScreen() {
     );
     if (hasDirectMatch) {
       setPlayerTeams([]);
+      setPlayerSearching(false);
       return;
     }
 
+    setPlayerSearching(true);
     playerSearchRef.current = setTimeout(async () => {
       try {
         const res = await fetch(
           `https://site.api.espn.com/apis/common/v3/search?query=${encodeURIComponent(q)}&limit=5&type=player`
         );
-        if (!res.ok) return;
+        if (!res.ok) {
+          setPlayerSearching(false);
+          return;
+        }
         const data = await res.json();
-        const teams: string[] = [];
+        const names: string[] = [];
         for (const item of data?.items || []) {
           for (const rel of item?.teamRelationships || []) {
-            const teamName = rel?.displayName || rel?.core?.displayName;
-            if (teamName) teams.push(teamName.toLowerCase());
+            // Collect the full name and the nickname for matching
+            // e.g. displayName="Atlanta Hawks", core.name="Hawks"
+            // Skip abbreviations (e.g. "ATL") — too short, matches inside city names
+            const full = (rel?.displayName || "").toLowerCase();
+            const nickname = (rel?.core?.name || "").toLowerCase();
+            if (full) names.push(full);
+            if (nickname) names.push(nickname);
           }
         }
-        setPlayerTeams([...new Set(teams)]);
-      } catch {}
+        setPlayerTeams([...new Set(names)]);
+      } catch {
+        // ESPN search failed silently
+      }
+      setPlayerSearching(false);
     }, 300);
 
     return () => {
@@ -352,14 +385,17 @@ export default function ComposeScreen() {
   const filteredGames = useMemo(() => {
     if (!gameSearch.trim()) return games;
     const q = gameSearch.toLowerCase();
-    return games.filter((g) =>
-      g.home_team.toLowerCase().includes(q) ||
-      g.away_team.toLowerCase().includes(q) ||
-      g.league.toLowerCase().includes(q) ||
-      playerTeams.some(
-        (t) => g.home_team.toLowerCase().includes(t) || g.away_team.toLowerCase().includes(t)
-      )
-    );
+    return games.filter((g) => {
+      const home = g.home_team.toLowerCase();
+      const away = g.away_team.toLowerCase();
+      const league = g.league.toLowerCase();
+      return (
+        home.includes(q) ||
+        away.includes(q) ||
+        league.includes(q) ||
+        playerTeams.some((t) => home.includes(t) || away.includes(t))
+      );
+    });
   }, [games, gameSearch, playerTeams]);
 
   // === GAME PICKER VIEW ===
@@ -387,7 +423,7 @@ export default function ComposeScreen() {
             style={s.pickerSearchInput}
             value={gameSearch}
             onChangeText={setGameSearch}
-            placeholder="Search teams or leagues..."
+            placeholder="Search teams, players, or leagues..."
             placeholderTextColor={colors.textDim}
             autoCorrect={false}
             returnKeyType="search"
@@ -397,11 +433,20 @@ export default function ComposeScreen() {
 
         {/* Games list — grouped by league */}
         {gamesLoading ? (
-          <ActivityIndicator color={colors.emerald} style={{ marginTop: 40 }} />
+          <GamePickerSkeleton />
         ) : (
           <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
             {leagueKeys.length === 0 && (
-              <View style={s.emptyGames}><Text style={s.emptyText}>No games found</Text></View>
+              <View style={s.emptyGames}>
+                {playerSearching ? (
+                  <>
+                    <ActivityIndicator size="small" color={colors.emerald} style={{ marginBottom: spacing.sm }} />
+                    <Text style={s.emptyText}>Searching players...</Text>
+                  </>
+                ) : (
+                  <Text style={s.emptyText}>No games found</Text>
+                )}
+              </View>
             )}
             {leagueKeys.map((league) => (
               <View key={league}>
@@ -416,6 +461,11 @@ export default function ComposeScreen() {
                   const isLive = item.status === "live";
                   const isFinal = item.status === "final";
                   const hasScore = (item as any).score_home != null;
+                  const isCombat = MMA_LEAGUES.includes(item.league);
+                  const homeWon = isCombat && isFinal && (item as any).score_home === 1;
+                  const awayWon = isCombat && isFinal && (item as any).score_away === 1;
+                  const method = isCombat ? (item as any).method : null;
+                  const fightRound = isCombat ? (item as any).round : 0;
                   return (
                     <Pressable
                       key={item.id}
@@ -430,38 +480,51 @@ export default function ComposeScreen() {
                       {/* Live indicator */}
                       {isLive && <View style={s.liveDot} />}
 
-                      {/* Away team */}
+                      {/* Away team / Fighter 1 */}
                       <View style={s.gcTeamCol}>
                         {item.away_logo ? (
-                          <Image source={{ uri: item.away_logo }} style={s.gcLogo} contentFit="contain" transition={0} />
+                          <Image source={{ uri: item.away_logo }} style={[s.gcLogo, isCombat && s.gcFighterPhoto]} contentFit="cover" transition={0} />
                         ) : (
                           <View style={s.gcLogoFallback}><Text style={s.gcLogoLetter}>{item.away_team.split(" ").pop()?.[0]}</Text></View>
                         )}
                         <Text style={s.gcTeamName} numberOfLines={1}>{item.away_team}</Text>
+                        {isCombat && isFinal && (
+                          <Text style={[s.gcWL, awayWon ? s.gcWin : s.gcLoss]}>{awayWon ? "W" : "L"}</Text>
+                        )}
                       </View>
 
                       {/* Score or time */}
                       <View style={s.gcCenter}>
-                        {hasScore ? (
+                        {isCombat && isFinal ? (
+                          <>
+                            <Text style={s.gcCombatMethod}>{method || "Decision"}</Text>
+                            {fightRound > 0 && <Text style={s.gcStatusLabel}>Rd {fightRound}</Text>}
+                          </>
+                        ) : hasScore ? (
                           <Text style={[s.gcScore, isLive && s.gcScoreLive]}>
                             {(item as any).score_away} - {(item as any).score_home}
                           </Text>
                         ) : (
                           <Text style={s.gcTime}>{formatGameTime(item.start_time)}</Text>
                         )}
-                        <Text style={[s.gcStatusLabel, isLive && s.gcStatusLive, isFinal && s.gcStatusFinal]}>
-                          {isLive ? "LIVE" : isFinal ? "FINAL" : new Date(item.start_time).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                        </Text>
+                        {!(isCombat && isFinal) && (
+                          <Text style={[s.gcStatusLabel, isLive && s.gcStatusLive, isFinal && s.gcStatusFinal]}>
+                            {isLive ? "LIVE" : isFinal ? "FINAL" : new Date(item.start_time).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                          </Text>
+                        )}
                       </View>
 
-                      {/* Home team */}
+                      {/* Home team / Fighter 2 */}
                       <View style={[s.gcTeamCol, s.gcTeamColRight]}>
                         {item.home_logo ? (
-                          <Image source={{ uri: item.home_logo }} style={s.gcLogo} contentFit="contain" transition={0} />
+                          <Image source={{ uri: item.home_logo }} style={[s.gcLogo, isCombat && s.gcFighterPhoto]} contentFit="cover" transition={0} />
                         ) : (
                           <View style={s.gcLogoFallback}><Text style={s.gcLogoLetter}>{item.home_team.split(" ").pop()?.[0]}</Text></View>
                         )}
                         <Text style={s.gcTeamName} numberOfLines={1}>{item.home_team}</Text>
+                        {isCombat && isFinal && (
+                          <Text style={[s.gcWL, homeWon ? s.gcWin : s.gcLoss]}>{homeWon ? "W" : "L"}</Text>
+                        )}
                       </View>
                     </Pressable>
                   );
@@ -533,28 +596,28 @@ export default function ComposeScreen() {
             <Text style={s.authorName}>{profile?.name || profile?.username || "You"}</Text>
           </View>
 
-          {/* Mention autocomplete */}
-          <MentionAutocomplete
-            text={content}
-            cursorPosition={cursorPos}
-            onSelect={handleMentionSelect}
-          />
-
-          {/* Text input */}
-          <TextInput
-            ref={textRef}
-            style={s.textInput}
-            value={content}
-            onChangeText={(t) => {
-              if (t.length <= MAX_CHARS) setContent(t);
-            }}
-            onSelectionChange={(e) => setCursorPos(e.nativeEvent.selection.end)}
-            placeholder="What's your take?"
-            placeholderTextColor={colors.textDim}
-            multiline
-            autoFocus
-            textAlignVertical="top"
-          />
+          {/* Text input with floating mention autocomplete */}
+          <View style={s.textInputWrapper}>
+            <MentionAutocomplete
+              text={content}
+              cursorPosition={cursorPos}
+              onSelect={handleMentionSelect}
+            />
+            <TextInput
+              ref={textRef}
+              style={s.textInput}
+              value={content}
+              onChangeText={(t) => {
+                if (t.length <= MAX_CHARS) setContent(t);
+              }}
+              onSelectionChange={(e) => setCursorPos(e.nativeEvent.selection.end)}
+              placeholder="What's your take?"
+              placeholderTextColor={colors.textDim}
+              multiline
+              autoFocus
+              textAlignVertical="top"
+            />
+          </View>
 
           {/* Tagged game */}
           {selectedGame && (
@@ -625,6 +688,10 @@ const s = StyleSheet.create({
   avatarLetter: { fontSize: 14, fontWeight: "700", color: colors.emerald },
   authorName: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text },
 
+  textInputWrapper: {
+    position: "relative",
+    zIndex: 50,
+  },
   textInput: {
     fontSize: fontSize.lg,
     color: colors.text,
@@ -734,6 +801,7 @@ const s = StyleSheet.create({
   gcTeamCol: { flex: 1, alignItems: "center", gap: 4 },
   gcTeamColRight: {},
   gcLogo: { width: 28, height: 28 },
+  gcFighterPhoto: { borderRadius: 14 },
   gcLogoFallback: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.cardHover, alignItems: "center", justifyContent: "center" },
   gcLogoLetter: { fontSize: 11, fontWeight: "700", color: colors.textMuted },
   gcTeamName: { fontSize: 10, fontWeight: "600", color: colors.textSecondary, textAlign: "center" },
@@ -744,6 +812,10 @@ const s = StyleSheet.create({
   gcStatusLabel: { fontSize: 9, fontWeight: "600", color: colors.textDim, marginTop: 2, textTransform: "uppercase" },
   gcStatusLive: { color: colors.emerald },
   gcStatusFinal: { color: colors.textDim },
+  gcWL: { fontSize: 11, fontWeight: "800", marginTop: 2 },
+  gcWin: { color: colors.emerald },
+  gcLoss: { color: colors.red },
+  gcCombatMethod: { fontSize: 10, fontWeight: "700", color: colors.textSecondary, textAlign: "center", textTransform: "uppercase" },
 
   emptyGames: { paddingVertical: 40, alignItems: "center" },
   emptyText: { fontSize: fontSize.sm, color: colors.textMuted },

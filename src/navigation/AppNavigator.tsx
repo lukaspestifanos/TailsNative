@@ -4,7 +4,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { View, Text, StyleSheet } from "react-native";
 import { colors, fontSize } from "../lib/theme";
 import { useAuth } from "../lib/AuthContext";
-import { FeedIcon, GamesIcon, MessagesIcon, NotificationsIcon, ProfileIcon, PlusIcon } from "../components/Icons";
+import { FeedIcon, GamesIcon, SearchIcon, MessagesIcon, NotificationsIcon, ProfileIcon } from "../components/Icons";
 
 // Screens
 import LoginScreen from "../screens/LoginScreen";
@@ -13,6 +13,7 @@ import GamesScreen from "../screens/GamesScreen";
 import MessagesScreen from "../screens/MessagesScreen";
 import NotificationsScreen from "../screens/NotificationsScreen";
 import ProfileScreen from "../screens/ProfileScreen";
+import SearchScreen from "../screens/SearchScreen";
 import PostDetailScreen from "../screens/PostDetailScreen";
 import GameDetailScreen from "../screens/GameDetailScreen";
 import UserProfileScreen from "../screens/UserProfileScreen";
@@ -43,7 +44,7 @@ export type RootStackParamList = {
 export type TabParamList = {
   Feed: undefined;
   Games: undefined;
-  Create: undefined;
+  Search: undefined;
   Messages: undefined;
   Notifications: undefined;
   Profile: undefined;
@@ -89,20 +90,6 @@ function MainTabs() {
       }}
     >
       <Tab.Screen
-        name="Create"
-        component={View}
-        listeners={({ navigation }) => ({
-          tabPress: (e: any) => {
-            e.preventDefault();
-            (navigation as any).navigate(isGuest ? "Login" : "Compose");
-          },
-        })}
-        options={{
-          tabBarLabel: "Create",
-          tabBarIcon: ({ focused }) => <PlusIcon size={22} color={focused ? colors.emerald : colors.textMuted} />,
-        }}
-      />
-      <Tab.Screen
         name="Feed"
         component={FeedScreen}
         options={{
@@ -116,6 +103,14 @@ function MainTabs() {
         options={{
           tabBarLabel: "Games",
           tabBarIcon: ({ focused }) => <GamesIcon color={focused ? colors.emerald : colors.textMuted} />,
+        }}
+      />
+      <Tab.Screen
+        name="Search"
+        component={SearchScreen}
+        options={{
+          tabBarLabel: "Search",
+          tabBarIcon: ({ focused }) => <SearchIcon color={focused ? colors.emerald : colors.textMuted} />,
         }}
       />
       <Tab.Screen
