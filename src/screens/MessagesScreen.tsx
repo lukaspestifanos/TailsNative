@@ -17,7 +17,7 @@ import type { RootStackParamList } from "../navigation/AppNavigator";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/AuthContext";
-import { FeedSkeleton } from "../components/Skeleton";
+import { MessagesSkeleton } from "../components/Skeleton";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -189,7 +189,7 @@ export default function MessagesScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Messages</Text>
         </View>
-        <FeedSkeleton />
+        <MessagesSkeleton />
       </SafeAreaView>
     );
   }
@@ -198,6 +198,13 @@ export default function MessagesScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Messages</Text>
+        <Pressable
+          style={styles.newMsgBtn}
+          onPress={() => navigation.navigate("NewConversation" as any)}
+          hitSlop={8}
+        >
+          <Text style={styles.newMsgIcon}>+</Text>
+        </Pressable>
       </View>
 
       <FlatList
@@ -294,6 +301,9 @@ const styles = StyleSheet.create({
   list: { paddingBottom: 100 },
 
   header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.md,
@@ -301,6 +311,12 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   headerTitle: { fontSize: fontSize.xl, fontWeight: "700", color: colors.text },
+  newMsgBtn: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: colors.emerald,
+    alignItems: "center", justifyContent: "center",
+  },
+  newMsgIcon: { fontSize: 18, fontWeight: "600", color: colors.black, marginTop: -1 },
 
   // Sign-in prompt
   signInPrompt: {

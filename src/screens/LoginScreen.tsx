@@ -15,10 +15,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import * as Device from "expo-device";
 import * as Application from "expo-application";
-import { supabase } from "../lib/supabase";
+import * as WebBrowser from "expo-web-browser";
+import { makeRedirectUri } from "expo-auth-session";
+import Svg, { Path } from "react-native-svg";
+import { supabase, SUPABASE_URL } from "../lib/supabase";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
 
-type Mode = "welcome" | "login" | "register" | "verify";
+type Mode = "welcome" | "login" | "register";
 
 async function getDeviceInfo() {
   let deviceId: string | null = null;
@@ -57,10 +60,98 @@ export default function LoginScreen() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [verifyEmail, setVerifyEmail] = useState("");
   const navigation = useNavigation();
   const passwordRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
+
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    setError("");
+
+    try {
+      // Get the OAuth URL from Supabase — it handles the Google provider config
+      // Use the Supabase callback URL directly — after Google auth, Supabase will
+      // redirect to our deep link with the tokens in the URL fragment
+      const redirectTo = "tails://auth/callback";
+
+      const { data, error: oauthErr } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+
+      if (oauthErr || !data.url) {
+        setError(oauthErr?.message || "Failed to start Google sign-in.");
+        setGoogleLoading(false);
+        return;
+      }
+
+      console.log("[Google] Opening auth URL, expecting redirect to:", redirectTo);
+
+      // Open the Supabase OAuth URL — listen for BOTH the custom scheme and the Supabase callback
+      // The browser will close when it detects a URL starting with our scheme
+      const result = await WebBrowser.openAuthSessionAsync(
+        data.url,
+        redirectTo,
+      );
+
+      console.log("[Google] Browser result:", result.type, result.type === "success" ? (result as any).url?.slice(0, 80) : "");
+
+      if (result.type === "success" && (result as any).url) {
+        const url = (result as any).url as string;
+        // Tokens can be in fragment (#) or query (?)
+        const fragment = url.includes("#") ? url.split("#")[1] : "";
+        const query = url.includes("?") ? url.split("?")[1] : "";
+        const params = new URLSearchParams(fragment || query);
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
+
+        if (accessToken && refreshToken) {
+          const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+
+          if (sessionErr) {
+            setError(sessionErr.message);
+            setGoogleLoading(false);
+            return;
+          }
+
+          // Register device fingerprint
+          if (sessionData.user) {
+            const device = await getDeviceInfo();
+            try {
+              await supabase.from("device_fingerprints").upsert({
+                user_id: sessionData.user.id,
+                device_id: device.deviceId,
+                device_model: device.deviceModel,
+                os_name: device.osName,
+                os_version: device.osVersion,
+                app_version: Application.nativeApplicationVersion || "1.0.0",
+                is_emulator: device.isEmulator,
+                last_seen_at: new Date().toISOString(),
+              }, { onConflict: "user_id,device_id" });
+            } catch {}
+          }
+
+          setGoogleLoading(false);
+          dismiss();
+          return;
+        }
+      }
+
+      // User cancelled or no tokens
+      setGoogleLoading(false);
+    } catch (e: any) {
+      setError(e.message || "Google sign-in failed.");
+      setGoogleLoading(false);
+    }
+  };
 
   const dismiss = () => {
     if (navigation.canGoBack()) navigation.goBack();
@@ -111,7 +202,7 @@ export default function LoginScreen() {
       }
     }
 
-    // Register with Supabase
+    // Register with Supabase — use the admin-friendly signUp
     console.log("[Register] Calling supabase.auth.signUp for", trimEmail);
     const { data, error: signUpErr } = await supabase.auth.signUp({
       email: trimEmail,
@@ -133,21 +224,55 @@ export default function LoginScreen() {
       return;
     }
 
-    // Log the attempt
-    try {
-      await supabase.rpc("log_registration_attempt", {
-        p_ip: "mobile_client",
-        p_device_id: device.deviceId,
-        p_email: trimEmail,
-        p_success: true,
-      });
-    } catch {}
+    // If we got a session, we're done
+    if (data.session) {
+      // Register device fingerprint
+      if (data.user) {
+        try {
+          await supabase.from("device_fingerprints").upsert({
+            user_id: data.user.id,
+            device_id: device.deviceId,
+            device_model: device.deviceModel,
+            os_name: device.osName,
+            os_version: device.osVersion,
+            app_version: Application.nativeApplicationVersion || "1.0.0",
+            is_emulator: device.isEmulator,
+            last_seen_at: new Date().toISOString(),
+          }, { onConflict: "user_id,device_id" });
+        } catch {}
+      }
+      setLoading(false);
+      dismiss();
+      return;
+    }
 
-    // Register device fingerprint if we got a user
-    if (data.user) {
+    // No session — Supabase has email confirmation on at the server level.
+    // Sign up succeeded but user can't sign in until confirmed.
+    // Workaround: try signing in anyway (works if confirm is actually off)
+    const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+      email: trimEmail,
+      password: trimPassword,
+    });
+
+    if (signInErr) {
+      // If it's the email confirmation error, give a clear message
+      const msg = signInErr.message.toLowerCase();
+      if (msg.includes("email") && msg.includes("confirm")) {
+        setError("Email confirmation is blocking sign-in. Go to Supabase > Authentication > Providers > Email and make sure 'Confirm email' is toggled OFF, then try again.");
+      } else if (msg.includes("invalid")) {
+        setError("Account may not have been created. Check Supabase Auth > Users. If not there, the database trigger may be blocking it — run: DROP TRIGGER IF EXISTS trg_update_trust_level ON profiles;");
+      } else {
+        setError(signInErr.message);
+      }
+      setLoading(false);
+      return;
+    }
+
+    // Sign in worked — register device
+    if (signInData.user) {
       try {
         await supabase.from("device_fingerprints").upsert({
-          user_id: data.user.id,
+          user_id: signInData.user.id,
           device_id: device.deviceId,
           device_model: device.deviceModel,
           os_name: device.osName,
@@ -157,21 +282,6 @@ export default function LoginScreen() {
           last_seen_at: new Date().toISOString(),
         }, { onConflict: "user_id,device_id" });
       } catch {}
-    }
-
-    // If no session returned, try signing in directly
-    if (!data.session && data.user) {
-      console.log("[Register] No session returned, attempting signInWithPassword...");
-      const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-        email: trimEmail,
-        password: trimPassword,
-      });
-      console.log("[Register] signIn result:", signInErr ? `ERROR: ${signInErr.message}` : `OK, session=${!!signInData.session}`);
-      if (signInErr) {
-        setError(signInErr.message);
-        setLoading(false);
-        return;
-      }
     }
 
     setLoading(false);
@@ -242,20 +352,6 @@ export default function LoginScreen() {
     dismiss();
   };
 
-  const handleResendVerification = async () => {
-    setLoading(true);
-    setError("");
-    const { error: resendErr } = await supabase.auth.resend({
-      type: "signup",
-      email: verifyEmail,
-    });
-    setLoading(false);
-    if (resendErr) {
-      setError(resendErr.message);
-    } else {
-      Alert.alert("Email Sent", "Check your inbox for the verification link.");
-    }
-  };
 
   // === WELCOME SCREEN ===
   if (mode === "welcome") {
@@ -281,6 +377,32 @@ export default function LoginScreen() {
 
             <View style={styles.buttonGroup}>
               <Pressable
+                style={({ pressed }) => [styles.googleBtn, pressed && styles.btnPressed]}
+                onPress={handleGoogleSignIn}
+                disabled={googleLoading}
+              >
+                {googleLoading ? (
+                  <ActivityIndicator color={colors.text} />
+                ) : (
+                  <>
+                    <Svg width={20} height={20} viewBox="0 0 48 48">
+                      <Path d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z" fill="#FFC107" />
+                      <Path d="M5.3 14.7l7.1 5.2C14.1 16.2 18.7 13 24 13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 15.4 2 8.1 7.3 5.3 14.7z" fill="#FF3D00" />
+                      <Path d="M24 46c5.4 0 10.3-1.8 14.1-5l-6.5-5.5C29.6 37.1 27 38 24 38c-6 0-11.1-4-12.8-9.5l-7 5.4C7 41 14.7 46 24 46z" fill="#4CAF50" />
+                      <Path d="M44.5 20H24v8.5h11.8c-.9 2.7-2.6 5-4.8 6.5l6.5 5.5C41 37.4 46 31.5 46 24c0-1.3-.2-2.7-.5-4z" fill="#1976D2" />
+                    </Svg>
+                    <Text style={styles.googleBtnText}>Continue with Google</Text>
+                  </>
+                )}
+              </Pressable>
+
+              <View style={styles.dividerRow}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>or</Text>
+                <View style={styles.dividerLine} />
+              </View>
+
+              <Pressable
                 style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
                 onPress={() => setMode("register")}
               >
@@ -304,51 +426,6 @@ export default function LoginScreen() {
     );
   }
 
-  // === VERIFY EMAIL SCREEN ===
-  if (mode === "verify") {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.content}>
-          <View style={styles.logoSection}>
-            <View style={styles.verifyIconWrap}>
-              <Text style={styles.verifyIcon}>@</Text>
-            </View>
-            <Text style={styles.verifyTitle}>Check Your Email</Text>
-            <Text style={styles.verifySubtitle}>
-              We sent a verification link to
-            </Text>
-            <Text style={styles.verifyEmail}>{verifyEmail}</Text>
-            <Text style={styles.verifyHint}>
-              Click the link in the email to verify your account, then come back and sign in.
-            </Text>
-          </View>
-
-          <View style={[styles.card, { gap: spacing.md }]}>
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-            <Pressable
-              style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed]}
-              onPress={() => { setMode("login"); setError(""); setPassword(""); }}
-            >
-              <Text style={styles.primaryBtnText}>Go to Sign In</Text>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [styles.tertiaryBtn, pressed && styles.btnPressed]}
-              onPress={handleResendVerification}
-              disabled={loading}
-            >
-              {loading ? (
-                <ActivityIndicator color={colors.emerald} size="small" />
-              ) : (
-                <Text style={styles.tertiaryBtnText}>Resend verification email</Text>
-              )}
-            </Pressable>
-          </View>
-        </View>
-      </SafeAreaView>
-    );
-  }
 
   // === LOGIN / REGISTER FORM ===
   const isRegister = mode === "register";
@@ -445,6 +522,27 @@ export default function LoginScreen() {
                 )}
               </Pressable>
             </View>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>or</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [styles.googleBtn, pressed && styles.btnPressed]}
+              onPress={handleGoogleSignIn}
+              disabled={googleLoading}
+            >
+              {googleLoading ? (
+                <ActivityIndicator color={colors.text} />
+              ) : (
+                <>
+                  <Text style={styles.googleIcon}>G</Text>
+                  <Text style={styles.googleBtnText}>Continue with Google</Text>
+                </>
+              )}
+            </Pressable>
 
             <Pressable
               style={styles.switchMode}
@@ -582,6 +680,40 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: "700",
   },
+  googleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: "#fff",
+    paddingVertical: 13,
+    borderRadius: radius.lg,
+  },
+  googleIcon: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#4285F4",
+  },
+  googleBtnText: {
+    color: "#1f1f1f",
+    fontSize: fontSize.md,
+    fontWeight: "600",
+  },
+  dividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginVertical: spacing.sm,
+  },
+  dividerLine: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.border,
+  },
+  dividerText: {
+    fontSize: fontSize.xs,
+    color: colors.textDim,
+  },
   tertiaryBtn: {
     paddingVertical: 10,
     alignItems: "center",
@@ -624,19 +756,4 @@ const styles = StyleSheet.create({
     marginTop: 40,
     textAlign: "center",
   },
-  // Verify screen
-  verifyIconWrap: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.emeraldBg,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: spacing.lg,
-  },
-  verifyIcon: { fontSize: 24, fontWeight: "800", color: colors.emerald },
-  verifyTitle: { fontSize: fontSize.xl, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
-  verifySubtitle: { fontSize: fontSize.sm, color: colors.textMuted, textAlign: "center" },
-  verifyEmail: { fontSize: fontSize.sm, fontWeight: "700", color: colors.emerald, marginTop: 4, marginBottom: spacing.md },
-  verifyHint: { fontSize: fontSize.xs, color: colors.textDim, textAlign: "center", lineHeight: 18 },
 });

@@ -6,8 +6,9 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
-  ActivityIndicator,
+  Alert,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { useRoute, useNavigation } from "@react-navigation/native";
@@ -20,6 +21,8 @@ import { colors, fontSize, spacing, radius } from "../lib/theme";
 import { timeAgo } from "../lib/formatters";
 import type { Post } from "../lib/types";
 import PostCard from "../components/PostCard";
+import EditProfileModal from "../components/EditProfileModal";
+import { ProfileSkeleton } from "../components/Skeleton";
 
 type Route = RouteProp<RootStackParamList, "UserProfile">;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -33,6 +36,7 @@ type ProfileData = {
   avatar_url: string | null;
   created_at: string;
   last_active_at: string | null;
+  username_changed_at: string | null;
 };
 
 type Reply = {
@@ -69,10 +73,11 @@ function getActivityText(lastActive: string | null): { text: string; color: stri
   return { text: "Inactive", color: colors.textDim };
 }
 
-export default function UserProfileScreen() {
-  const { params } = useRoute<Route>();
+export default function UserProfileScreen({ overrideUsername }: { overrideUsername?: string } = {}) {
+  const route = useRoute<Route>();
   const navigation = useNavigation<Nav>();
-  const { user } = useAuth();
+  const { user, signOut, refreshProfile } = useAuth();
+  const params = overrideUsername ? { username: overrideUsername } : route.params;
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
@@ -88,17 +93,22 @@ export default function UserProfileScreen() {
   const [followBusy, setFollowBusy] = useState(false);
 
   const [activeTab, setActiveTab] = useState<ProfileTab>("all");
+  const [showEditModal, setShowEditModal] = useState(false);
 
-  // Enriches post rows with profiles + games
+  // Enriches post rows with profiles + games + quote posts
   const enrichPosts = async (rows: any[], orderedIds?: string[]): Promise<Post[]> => {
     if (!rows.length) return [];
     const userIds = [...new Set(rows.map((r: any) => r.user_id))];
     const gameIds = [...new Set(rows.filter((r: any) => r.game_id).map((r: any) => r.game_id))];
+    const quotePostIds = [...new Set(rows.filter((r: any) => r.quote_post_id).map((r: any) => r.quote_post_id))];
 
-    const [profilesRes, gamesRes] = await Promise.all([
+    const [profilesRes, gamesRes, quotePostsRes] = await Promise.all([
       supabase.from("profiles").select("id, username, name, avatar_url").in("id", userIds),
       gameIds.length > 0
         ? supabase.from("games").select("id, league, home_team, away_team, start_time, score_home, score_away, status, home_logo, away_logo").in("id", gameIds)
+        : Promise.resolve({ data: [] }),
+      quotePostIds.length > 0
+        ? supabase.from("posts").select("id, user_id, content, image_url, created_at").in("id", quotePostIds)
         : Promise.resolve({ data: [] }),
     ]);
 
@@ -106,6 +116,23 @@ export default function UserProfileScreen() {
     (profilesRes.data || []).forEach((p: any) => { pMap[p.id] = p; });
     const gMap: Record<string, any> = {};
     (gamesRes.data || []).forEach((g: any) => { gMap[g.id] = g; });
+
+    // Enrich quote posts with profiles
+    const qpMap: Record<string, any> = {};
+    const quotePosts = quotePostsRes.data || [];
+    if (quotePosts.length > 0) {
+      const qpUserIds = [...new Set(quotePosts.map((qp: any) => qp.user_id).filter((id: string) => !pMap[id]))];
+      if (qpUserIds.length > 0) {
+        const { data: qpProfiles } = await supabase.from("profiles").select("id, username, name, avatar_url").in("id", qpUserIds);
+        (qpProfiles || []).forEach((p: any) => { pMap[p.id] = p; });
+      }
+      quotePosts.forEach((qp: any) => {
+        qpMap[qp.id] = {
+          ...qp,
+          profiles: pMap[qp.user_id] ? { username: pMap[qp.user_id].username, name: pMap[qp.user_id].name, avatar_url: pMap[qp.user_id].avatar_url } : null,
+        };
+      });
+    }
 
     const postMap: Record<string, Post> = {};
     rows.forEach((row: any) => {
@@ -117,7 +144,7 @@ export default function UserProfileScreen() {
         profiles: pMap[row.user_id] ? { username: pMap[row.user_id].username, name: pMap[row.user_id].name, avatar_url: pMap[row.user_id].avatar_url, last_active_at: null } : null,
         games: row.game_id ? gMap[row.game_id] || null : null,
         parlay: null,
-        quote_post: null,
+        quote_post: row.quote_post_id ? qpMap[row.quote_post_id] || null : null,
       };
     });
 
@@ -131,7 +158,7 @@ export default function UserProfileScreen() {
     // Profile
     const { data: p } = await supabase
       .from("profiles")
-      .select("id, username, name, bio, avatar_url, created_at, last_active_at")
+      .select("id, username, name, bio, avatar_url, created_at, last_active_at, username_changed_at")
       .eq("username", username)
       .maybeSingle();
 
@@ -255,6 +282,20 @@ export default function UserProfileScreen() {
     return [...pinned, ...rest];
   }, [posts, activeTab, likedPosts, tailedPosts]);
 
+  const handleProfileSaved = useCallback((updated: { username: string; name: string | null; bio: string | null; avatar_url: string | null }) => {
+    setShowEditModal(false);
+    if (profile) {
+      setProfile({
+        ...profile,
+        username: updated.username,
+        name: updated.name,
+        bio: updated.bio,
+        avatar_url: updated.avatar_url,
+      });
+    }
+    refreshProfile();
+  }, [profile, refreshProfile]);
+
   const isMe = user && profile && user.id === profile.id;
   const ringColor = profile ? getActivityRingColor(profile.last_active_at) : colors.textDim;
   const activity = profile ? getActivityText(profile.last_active_at) : null;
@@ -268,10 +309,11 @@ export default function UserProfileScreen() {
   ];
 
   if (loading) {
+    const LoadingWrapper = overrideUsername ? SafeAreaView : View;
     return (
-      <View style={styles.container}>
-        <ActivityIndicator color={colors.emerald} style={{ marginTop: 60 }} />
-      </View>
+      <LoadingWrapper style={styles.container} {...(overrideUsername ? { edges: ["top"] as const } : {})}>
+        <ProfileSkeleton />
+      </LoadingWrapper>
     );
   }
 
@@ -316,8 +358,12 @@ export default function UserProfileScreen() {
           {/* Stats row */}
           <View style={styles.statsRow}>
             <Text style={styles.stat}><Text style={styles.statBold}>{posts.length}</Text> posts</Text>
-            <Text style={styles.stat}><Text style={styles.statBold}>{followers}</Text> followers</Text>
-            <Text style={styles.stat}><Text style={styles.statBold}>{following}</Text> following</Text>
+            <Pressable onPress={() => navigation.push("FollowList", { userId: profile.id, username: profile.username, tab: "followers" })}>
+              <Text style={styles.stat}><Text style={styles.statBold}>{followers}</Text> followers</Text>
+            </Pressable>
+            <Pressable onPress={() => navigation.push("FollowList", { userId: profile.id, username: profile.username, tab: "following" })}>
+              <Text style={styles.stat}><Text style={styles.statBold}>{following}</Text> following</Text>
+            </Pressable>
           </View>
 
           {/* Record */}
@@ -334,8 +380,30 @@ export default function UserProfileScreen() {
       {/* Bio */}
       {profile.bio ? <Text style={styles.bio}>{profile.bio}</Text> : null}
 
-      {/* Follow button */}
-      {!isMe && user && (
+      {/* Edit Profile / Follow / Sign out */}
+      {isMe ? (
+        <View style={styles.followRow}>
+          <View style={styles.meButtonsRow}>
+            <Pressable
+              onPress={() => setShowEditModal(true)}
+              style={styles.editProfileBtn}
+            >
+              <Text style={styles.editProfileBtnText}>Edit Profile</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => {
+                Alert.alert("Sign Out", "Are you sure?", [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Sign Out", style: "destructive", onPress: signOut },
+                ]);
+              }}
+              style={styles.signOutBtn}
+            >
+              <Text style={styles.signOutBtnText}>Sign Out</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : user ? (
         <View style={styles.followRow}>
           <Pressable
             onPress={toggleFollow}
@@ -347,7 +415,7 @@ export default function UserProfileScreen() {
             </Text>
           </Pressable>
         </View>
-      )}
+      ) : null}
 
       {/* Tabs */}
       <View style={styles.tabs}>
@@ -394,8 +462,10 @@ export default function UserProfileScreen() {
     </Pressable>
   );
 
+  const Wrapper = overrideUsername ? SafeAreaView : View;
+
   return (
-    <View style={styles.container}>
+    <Wrapper style={styles.container} {...(overrideUsername ? { edges: ["top"] as const } : {})}>
       {activeTab === "replies" ? (
         <FlatList
           data={replies}
@@ -409,7 +479,7 @@ export default function UserProfileScreen() {
       ) : (
         <FlatList
           data={filteredPosts}
-          renderItem={({ item }) => <PostCard post={item} />}
+          renderItem={({ item }) => <PostCard post={item} onNavigate={(s: string, p: any) => navigation.navigate(s as any, p)} userId={user?.id ?? null} />}
           keyExtractor={(item) => item.id}
           ListHeaderComponent={ProfileHeader}
           ListEmptyComponent={
@@ -423,7 +493,16 @@ export default function UserProfileScreen() {
           contentContainerStyle={styles.list}
         />
       )}
-    </View>
+
+      {isMe && profile && (
+        <EditProfileModal
+          visible={showEditModal}
+          profile={profile}
+          onClose={() => setShowEditModal(false)}
+          onSaved={handleProfileSaved}
+        />
+      )}
+    </Wrapper>
   );
 }
 
@@ -483,6 +562,17 @@ const styles = StyleSheet.create({
 
   // Follow
   followRow: { paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
+  meButtonsRow: { flexDirection: "row", gap: spacing.sm },
+  editProfileBtn: {
+    flex: 1,
+    backgroundColor: "transparent",
+    paddingVertical: 8,
+    borderRadius: radius.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  editProfileBtnText: { fontSize: fontSize.sm, fontWeight: "600", color: colors.text },
   followBtn: {
     backgroundColor: colors.emerald,
     paddingVertical: 8,
@@ -496,6 +586,16 @@ const styles = StyleSheet.create({
   },
   followBtnText: { fontSize: fontSize.sm, fontWeight: "700", color: colors.black },
   followBtnTextFollowing: { color: colors.textSecondary },
+  signOutBtn: {
+    backgroundColor: "transparent",
+    paddingVertical: 8,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radius.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+  },
+  signOutBtnText: { fontSize: fontSize.sm, fontWeight: "600", color: colors.red },
 
   // Tabs
   tabs: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: colors.border },

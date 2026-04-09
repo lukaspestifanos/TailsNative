@@ -44,8 +44,17 @@ type Section = {
 };
 
 const MMA_LEAGUES = ["UFC", "PFL", "Bellator"];
-const SOCCER_LEAGUES = ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1", "UCL", "Europa League", "World Cup", "Copa America", "MLS", "Friendlies"];
+const SOCCER_LEAGUES = ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1", "UCL", "Europa League", "World Cup", "WCQ UEFA", "Nations League", "Copa America", "MLS", "Friendlies"];
 const TENNIS_LEAGUES = ["ATP", "WTA"];
+
+const LEAGUE_LOGOS: Record<string, string> = {
+  nba: "https://a.espncdn.com/i/teamlogos/leagues/500/nba.png",
+  mlb: "https://a.espncdn.com/i/teamlogos/leagues/500/mlb.png",
+  ncaam: "https://a.espncdn.com/i/espn/misc_logos/500/ncaa.png",
+  mma: "https://a.espncdn.com/i/teamlogos/leagues/500/ufc.png",
+  soccer: "https://a.espncdn.com/i/teamlogos/leagues/500/fifa.png",
+  tennis: "https://a.espncdn.com/redesign/assets/img/icons/ESPN-icon-tennis.png",
+};
 
 const FILTERS = [
   { id: "all", label: "All" },
@@ -99,7 +108,7 @@ const FAV_LEAGUE_MAP: Record<string, string[]> = {
   NBA: ["NBA"],
   MLB: ["MLB"],
   NCAAM: ["NCAAM"],
-  soccer: ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1", "UCL", "Europa League", "World Cup", "Copa America", "MLS", "Friendlies"],
+  soccer: ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1", "UCL", "Europa League", "World Cup", "WCQ UEFA", "Nations League", "Copa America", "MLS", "Friendlies"],
   mma: ["UFC", "PFL", "Bellator"],
   tennis: ["ATP", "WTA"],
   golf: ["PGA", "LPGA"],
@@ -134,30 +143,65 @@ export default function GamesScreen() {
         ...(data.tennis || []),
       ];
 
-      // Also fetch yesterday's ESPN scoreboards directly — catches
-      // last night's live/final games with real-time scores
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      const dateStr = yesterday.toISOString().slice(0, 10).replace(/-/g, "");
+      // Fetch ESPN scoreboards directly
+      // - NBA/MLB: yesterday + today (API covers most)
+      // - Soccer/NCAAM/Tennis: 72h back + 7 days forward (sparse schedules)
       const todayIds = new Set(todayGames.map((g) => g.id));
 
-      const espnUrls = [
-        { url: `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${dateStr}`, league: "NBA" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${dateStr}`, league: "MLB" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=${dateStr}`, league: "Premier League" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/esp.1/scoreboard?dates=${dateStr}`, league: "La Liga" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/ger.1/scoreboard?dates=${dateStr}`, league: "Bundesliga" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/ita.1/scoreboard?dates=${dateStr}`, league: "Serie A" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/fra.1/scoreboard?dates=${dateStr}`, league: "Ligue 1" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=${dateStr}`, league: "UCL" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.europa/scoreboard?dates=${dateStr}`, league: "Europa League" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=${dateStr}`, league: "World Cup" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/conmebol.america/scoreboard?dates=${dateStr}`, league: "Copa America" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard?dates=${dateStr}`, league: "MLS" },
-        { url: `https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.friendly/scoreboard?dates=${dateStr}`, league: "Friendlies" },
+      // Generate date strings for a range
+      const makeDateStr = (offset: number) => {
+        const d = new Date(Date.now() + offset * 24 * 60 * 60 * 1000);
+        return d.toISOString().slice(0, 10).replace(/-/g, "");
+      };
+
+      const yesterdayStr = makeDateStr(-1);
+      const todayStr = makeDateStr(0);
+
+      // 72h back + 7 days forward for sparse sports
+      const extendedDates: string[] = [];
+      for (let i = -3; i <= 7; i++) extendedDates.push(makeDateStr(i));
+
+      const extendedEndpoints = [
+        // Soccer
+        { path: "soccer/eng.1", league: "Premier League" },
+        { path: "soccer/esp.1", league: "La Liga" },
+        { path: "soccer/ger.1", league: "Bundesliga" },
+        { path: "soccer/ita.1", league: "Serie A" },
+        { path: "soccer/fra.1", league: "Ligue 1" },
+        { path: "soccer/uefa.champions", league: "UCL" },
+        { path: "soccer/uefa.europa", league: "Europa League" },
+        { path: "soccer/fifa.world", league: "World Cup" },
+        { path: "soccer/conmebol.america", league: "Copa America" },
+        { path: "soccer/usa.1", league: "MLS" },
+        { path: "soccer/fifa.friendly", league: "Friendlies" },
+        { path: "soccer/fifa.worldq.uefa", league: "WCQ UEFA" },
+        { path: "soccer/uefa.nations", league: "Nations League" },
+        // NCAAM
+        { path: "basketball/mens-college-basketball", league: "NCAAM" },
       ];
 
-      const yesterdayGames: Game[] = [];
-      const cutoff = Date.now() - 18 * 60 * 60 * 1000; // 18h ago
+      const EXTENDED_LEAGUES = new Set([...SOCCER_LEAGUES, "NCAAM"]);
+
+      const espnUrls = [
+        // Yesterday + today — NBA, MLB
+        { url: `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${yesterdayStr}`, league: "NBA" },
+        { url: `https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=${todayStr}`, league: "NBA" },
+        { url: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${yesterdayStr}`, league: "MLB" },
+        { url: `https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=${todayStr}`, league: "MLB" },
+        // Extended range — soccer + NCAAM
+        ...extendedEndpoints.flatMap(({ path, league }) =>
+          extendedDates.map((dateStr) => ({
+            url: `https://site.api.espn.com/apis/site/v2/sports/${path}/scoreboard?dates=${dateStr}`,
+            league,
+          }))
+        ),
+      ];
+
+      const extraGames: Game[] = [];
+      const seenIds = new Set<string>();
+      const cutoff18h = Date.now() - 18 * 60 * 60 * 1000;
+      const cutoff72h = Date.now() - 72 * 60 * 60 * 1000;
+
       await Promise.all(espnUrls.map(async ({ url, league: lg }) => {
         try {
           const r = await fetch(url);
@@ -171,11 +215,15 @@ export default function GamesScreen() {
             const id = isSoccerLeague
               ? `soccer_${lg.toLowerCase().replace(/\s+/g, "_")}_${event.id}`
               : `${lg.toLowerCase()}_espn_${event.id}`;
-            if (todayIds.has(id)) continue; // already in today's list
+            if (todayIds.has(id) || seenIds.has(id)) continue;
+            seenIds.add(id);
             const isCompleted = event.status?.type?.completed === true;
             const eventTime = new Date(event.date || 0).getTime();
-            if (isCompleted && eventTime < cutoff) continue; // skip old finals
-            yesterdayGames.push({
+            // Extended leagues: keep finals up to 72h, others 18h
+            const isExtended = EXTENDED_LEAGUES.has(lg);
+            const finCutoff = isExtended ? cutoff72h : cutoff18h;
+            if (isCompleted && eventTime < finCutoff) continue;
+            extraGames.push({
               id,
               league: lg,
               home_team: home?.team?.displayName || "TBD",
@@ -193,7 +241,20 @@ export default function GamesScreen() {
         } catch {}
       }));
 
-      const allGames = [...todayGames, ...yesterdayGames];
+      // Deduplicate — API and ESPN can return the same game with different IDs
+      const dedupKey = (g: Game) => {
+        const day = g.start_time ? g.start_time.slice(0, 10) : "";
+        return `${g.league}|${g.home_team}|${g.away_team}|${day}`.toLowerCase();
+      };
+      const seen = new Set<string>();
+      const allGames: Game[] = [];
+      // Prefer API games (todayGames) over ESPN extras
+      for (const g of [...todayGames, ...extraGames]) {
+        const key = dedupKey(g);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        allGames.push(g);
+      }
       allGamesRef.current = allGames;
 
       // Group by league
@@ -252,8 +313,8 @@ export default function GamesScreen() {
     return () => sub.remove();
   }, [fetchGames]);
 
-  // Player→team search via our own Supabase players table (no ESPN dependency)
-  // Typing "LeBron" → queries players table → finds "Los Angeles Lakers" → shows Lakers game
+  // Player→team search via ESPN athlete search API
+  // Typing "LeBron" → ESPN returns "Los Angeles Lakers" → shows Lakers game
   useEffect(() => {
     const q = search.trim();
     if (q.length < 2) { setPlayerResults([]); return; }
@@ -267,30 +328,31 @@ export default function GamesScreen() {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(async () => {
       try {
-        // Search our own players table
-        const { data: players } = await supabase
-          .from("players")
-          .select("team")
-          .ilike("name", `%${q}%`)
-          .eq("is_active", true)
-          .limit(10);
+        const res = await fetch(
+          `https://site.api.espn.com/apis/common/v3/search?query=${encodeURIComponent(q)}&limit=5&type=player`
+        );
+        if (!res.ok) { setPlayerResults([]); return; }
+        const data = await res.json();
 
-        if (!players || players.length === 0) {
-          setPlayerResults([]);
-          return;
+        const teamNames = new Set<string>();
+        for (const item of data?.items || []) {
+          for (const rel of item?.teamRelationships || []) {
+            const teamName = rel?.displayName || rel?.core?.displayName;
+            if (teamName) teamNames.add(teamName.toLowerCase());
+          }
         }
 
-        const teamNames = new Set(players.map((p: any) => p.team));
+        if (teamNames.size === 0) { setPlayerResults([]); return; }
 
         const matched = allGamesRef.current.filter((g) =>
-          teamNames.has(g.home_team) || teamNames.has(g.away_team)
+          teamNames.has(g.home_team.toLowerCase()) || teamNames.has(g.away_team.toLowerCase())
         );
 
         setPlayerResults(matched.map((g) => ({
           name: "", team: "", headshot: "", position: "",
           gameId: g.id,
         })));
-      } catch {}
+      } catch { setPlayerResults([]); }
     }, 300);
 
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
@@ -325,9 +387,10 @@ export default function GamesScreen() {
       })).filter((s) => s.data.length > 0)
     : sportFiltered;
 
-  // Which filters have games today
+  // Which filters to show — always show extended sports, hide others if no games
+  const ALWAYS_SHOW = new Set(["all", "soccer", "ncaam"]);
   const activeFilters = FILTERS.filter((f) => {
-    if (f.id === "all") return true;
+    if (ALWAYS_SHOW.has(f.id)) return true;
     return sections.some((s) => f.match?.(s.league));
   });
 
@@ -373,6 +436,7 @@ export default function GamesScreen() {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow} contentContainerStyle={styles.filterContent}>
           {activeFilters.map((f) => {
             const active = filter === f.id;
+            const logo = LEAGUE_LOGOS[f.id];
             const liveCount = f.id === "all" ? totalLive : sections.filter((s) => f.match?.(s.league)).reduce((sum, s) => sum + s.liveCount, 0);
             return (
               <Pressable
@@ -380,7 +444,11 @@ export default function GamesScreen() {
                 onPress={() => setFilter(f.id)}
                 style={[styles.chip, active && styles.chipActive]}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
+                {logo ? (
+                  <Image source={{ uri: logo }} style={styles.chipLogo} contentFit="contain" />
+                ) : (
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{f.label}</Text>
+                )}
                 {liveCount > 0 && (
                   <View style={[styles.chipDot, active && styles.chipDotActive]} />
                 )}
@@ -514,8 +582,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.md,
     paddingHorizontal: spacing.md,
-    paddingVertical: 8,
+    height: 40,
     fontSize: fontSize.sm,
+    textAlignVertical: "center",
     color: colors.text,
   },
 
@@ -564,6 +633,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.emerald,
     borderColor: colors.emerald,
   },
+  chipLogo: { width: 20, height: 20 },
   chipText: { fontSize: fontSize.xs, fontWeight: "600", color: colors.textMuted },
   chipTextActive: { color: colors.black },
   chipDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.emerald },

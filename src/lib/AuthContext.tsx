@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import type { Profile } from "./types";
+import { registerForPushNotifications, unregisterPushToken } from "./pushNotifications";
 
 interface AuthState {
   session: Session | null;
@@ -36,7 +37,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error) {
+        // Stale/invalid refresh token — clear everything
+        console.warn("[Auth] getSession error, signing out:", error.message);
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
       setSession(session);
       if (session?.user) {
         fetchProfile(session.user.id);
@@ -46,10 +56,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "TOKEN_REFRESHED" && !session) {
+        // Refresh failed — force sign out
+        console.warn("[Auth] Token refresh failed, signing out");
+        supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        setProfile(null);
+        return;
+      }
       setSession(session);
       if (session?.user) {
         fetchProfile(session.user.id);
+        // Register for push notifications on sign-in
+        registerForPushNotifications(session.user.id).catch(() => {});
       } else {
         setProfile(null);
       }
@@ -59,6 +79,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
+    if (session?.user) {
+      await unregisterPushToken(session.user.id).catch(() => {});
+    }
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);

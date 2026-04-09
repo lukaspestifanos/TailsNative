@@ -1,10 +1,12 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
   Dimensions,
+  GestureResponderEvent,
+  LayoutChangeEvent,
 } from "react-native";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -42,6 +44,14 @@ export default function VideoPostScreen() {
   const [paused, setPaused] = useState(false);
   const [bottomHeight, setBottomHeight] = useState(200);
 
+  // Seek bar state
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+  const seekBarWidth = useRef(0);
+  const seekBarX = useRef(0);
+  const seekBarRef = useRef<View>(null);
+
   const player = useVideoPlayer(params.videoUrl, (p) => {
     p.loop = true;
     p.muted = false;
@@ -51,6 +61,42 @@ export default function VideoPostScreen() {
     const t = setTimeout(() => player.play(), 100);
     return () => clearTimeout(t);
   }, []);
+
+  // Poll playback progress
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (isSeeking) return;
+      const dur = player.duration;
+      const cur = player.currentTime;
+      if (dur > 0) {
+        setDuration(dur);
+        setProgress(cur / dur);
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  }, [player, isSeeking]);
+
+  const handleSeek = useCallback((evt: GestureResponderEvent) => {
+    if (duration <= 0 || seekBarWidth.current <= 0) return;
+    const touchX = evt.nativeEvent.pageX - seekBarX.current;
+    const clamped = Math.max(0, Math.min(touchX, seekBarWidth.current));
+    const ratio = clamped / seekBarWidth.current;
+    setProgress(ratio);
+    player.currentTime = ratio * duration;
+  }, [duration, player]);
+
+  const onSeekBarLayout = useCallback((e: LayoutChangeEvent) => {
+    seekBarWidth.current = e.nativeEvent.layout.width;
+    seekBarRef.current?.measureInWindow((x) => {
+      seekBarX.current = x;
+    });
+  }, []);
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
 
   useEffect(() => {
     async function load() {
@@ -230,7 +276,28 @@ export default function VideoPostScreen() {
             )}
           </Pressable>
 
-          <View style={{ flex: 1 }} />
+          {/* Seek bar */}
+          <View
+            ref={seekBarRef}
+            style={styles.seekBar}
+            onLayout={onSeekBarLayout}
+            onStartShouldSetResponder={() => true}
+            onMoveShouldSetResponder={() => true}
+            onResponderGrant={(e) => { setIsSeeking(true); handleSeek(e); }}
+            onResponderMove={handleSeek}
+            onResponderRelease={(e) => { handleSeek(e); setIsSeeking(false); }}
+          >
+            <View style={styles.seekTrack}>
+              <View style={[styles.seekFill, { width: `${progress * 100}%` }]} />
+            </View>
+            <View style={[styles.seekThumb, { left: `${progress * 100}%` }]} />
+          </View>
+
+          {duration > 0 && (
+            <Text style={styles.timeText}>
+              {formatTime(progress * duration)}/{formatTime(duration)}
+            </Text>
+          )}
 
           <Pressable onPress={toggleMute} hitSlop={12}>
             {muted ? (
@@ -391,5 +458,40 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: "row",
     alignItems: "center",
+    gap: spacing.sm,
+  },
+
+  // Seek bar
+  seekBar: {
+    flex: 1,
+    height: 28,
+    justifyContent: "center",
+  },
+  seekTrack: {
+    height: 3,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    borderRadius: 1.5,
+    overflow: "hidden",
+  },
+  seekFill: {
+    height: 3,
+    backgroundColor: "#fff",
+    borderRadius: 1.5,
+  },
+  seekThumb: {
+    position: "absolute",
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#fff",
+    marginLeft: -6,
+    top: 8,
+  },
+  timeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.7)",
+    fontVariant: ["tabular-nums"],
+    minWidth: 38,
   },
 });

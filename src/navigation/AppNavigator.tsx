@@ -4,7 +4,7 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { View, Text, StyleSheet } from "react-native";
 import { colors, fontSize } from "../lib/theme";
 import { useAuth } from "../lib/AuthContext";
-import { FeedIcon, GamesIcon, MessagesIcon, NotificationsIcon, ProfileIcon } from "../components/Icons";
+import { FeedIcon, GamesIcon, MessagesIcon, NotificationsIcon, ProfileIcon, PlusIcon } from "../components/Icons";
 
 // Screens
 import LoginScreen from "../screens/LoginScreen";
@@ -20,6 +20,9 @@ import ConversationScreen from "../screens/ConversationScreen";
 import VideoPostScreen from "../screens/VideoPostScreen";
 import PlayerScreen from "../screens/PlayerScreen";
 import OnboardingScreen from "../screens/OnboardingScreen";
+import ComposeScreen from "../screens/ComposeScreen";
+import NewConversationScreen from "../screens/NewConversationScreen";
+import FollowListScreen from "../screens/FollowListScreen";
 
 // Type definitions for navigation
 export type RootStackParamList = {
@@ -30,13 +33,17 @@ export type RootStackParamList = {
   GameDetail: { gameId: string; game?: { id: string; league: string; home_team: string; away_team: string; score_home: number | null; score_away: number | null; status: string | null; start_time: string; home_logo?: string; away_logo?: string; period?: number; clock?: string } };
   Player: { athleteId: string; name: string; headshot: string; league: string; stats?: string[]; statLabels?: string[] };
   UserProfile: { username: string };
+  FollowList: { userId: string; username: string; tab: "followers" | "following" };
   Conversation: { conversationId: string };
   Onboarding: undefined;
+  Compose: { gameId?: string } | undefined;
+  NewConversation: undefined;
 };
 
 export type TabParamList = {
   Feed: undefined;
   Games: undefined;
+  Create: undefined;
   Messages: undefined;
   Notifications: undefined;
   Profile: undefined;
@@ -56,8 +63,12 @@ const TAB_ICONS: Record<string, React.FC<{ size?: number; color?: string }>> = {
 
 // Main tab navigator — matches web's BottomTabBar
 function MainTabs() {
+  const { session, profile } = useAuth();
+  const isGuest = !session || !profile?.username;
+
   return (
     <Tab.Navigator
+      initialRouteName="Feed"
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
@@ -77,6 +88,20 @@ function MainTabs() {
         },
       }}
     >
+      <Tab.Screen
+        name="Create"
+        component={View}
+        listeners={({ navigation }) => ({
+          tabPress: (e: any) => {
+            e.preventDefault();
+            (navigation as any).navigate(isGuest ? "Login" : "Compose");
+          },
+        })}
+        options={{
+          tabBarLabel: "Create",
+          tabBarIcon: ({ focused }) => <PlusIcon size={22} color={focused ? colors.emerald : colors.textMuted} />,
+        }}
+      />
       <Tab.Screen
         name="Feed"
         component={FeedScreen}
@@ -167,7 +192,7 @@ export default function AppNavigator() {
               headerShown: false,
               animation: "slide_from_bottom",
               gestureEnabled: true,
-              fullScreenGestureEnabled: true,
+              fullScreenGestureEnabled: false,
               contentStyle: { backgroundColor: colors.black },
             }}
           />
@@ -211,6 +236,18 @@ export default function AppNavigator() {
             }}
           />
           <Stack.Screen
+            name="FollowList"
+            component={FollowListScreen}
+            options={({ route }: any) => ({
+              headerShown: true,
+              headerTitle: `@${route.params.username}`,
+              headerStyle: { backgroundColor: colors.bg },
+              headerTintColor: colors.text,
+              headerShadowVisible: false,
+              headerBackTitle: "",
+            })}
+          />
+          <Stack.Screen
             name="Conversation"
             component={ConversationScreen}
             options={{
@@ -225,6 +262,24 @@ export default function AppNavigator() {
           <Stack.Screen
             name="Login"
             component={LoginScreen}
+            options={{
+              headerShown: false,
+              animation: "slide_from_bottom",
+              presentation: "modal",
+            }}
+          />
+          <Stack.Screen
+            name="NewConversation"
+            component={NewConversationScreen}
+            options={{
+              headerShown: false,
+              animation: "slide_from_bottom",
+              presentation: "modal",
+            }}
+          />
+          <Stack.Screen
+            name="Compose"
+            component={ComposeScreen}
             options={{
               headerShown: false,
               animation: "slide_from_bottom",

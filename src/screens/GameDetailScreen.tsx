@@ -17,6 +17,7 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/AppNavigator";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
 import { API_BASE, supabase } from "../lib/supabase";
+import { useAuth } from "../lib/AuthContext";
 import type { Post } from "../lib/types";
 import PostCard from "../components/PostCard";
 import { PostDetailSkeleton } from "../components/Skeleton";
@@ -129,6 +130,7 @@ function formatStatusText(g: GameData): string {
 export default function GameDetailScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { user } = useAuth();
   const gameId = params.gameId;
   const initialGame = params.game ? (params.game as GameData) : null;
 
@@ -945,7 +947,7 @@ export default function GameDetailScreen() {
     <View style={styles.container}>
       <FlatList
         data={activeTab === "posts" ? posts : []}
-        renderItem={({ item }) => <PostCard post={item} />}
+        renderItem={({ item }) => <PostCard post={item} onNavigate={(s: string, p: any) => navigation.navigate(s as any, p)} userId={user?.id ?? null} />}
         keyExtractor={(item) => item.id}
         ListHeaderComponent={Header}
         ListEmptyComponent={

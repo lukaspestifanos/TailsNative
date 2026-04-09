@@ -2,7 +2,7 @@ import "react-native-url-polyfill/auto";
 import { createClient } from "@supabase/supabase-js";
 import * as SecureStore from "expo-secure-store";
 
-const SUPABASE_URL = "https://aribokpssbfghhcfhuut.supabase.co";
+export const SUPABASE_URL = "https://aribokpssbfghhcfhuut.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFyaWJva3Bzc2JmZ2hoY2ZodXV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjkyMTIyMzQsImV4cCI6MjA4NDc4ODIzNH0.ebsYJ-b6YXd_TIOZHeGtIvdD0tdWZdbseH6klotAxl8";
 

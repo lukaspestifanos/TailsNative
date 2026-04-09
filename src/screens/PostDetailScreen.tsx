@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Dimensions,
 } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
@@ -19,12 +20,15 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../navigation/AppNavigator";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../lib/AuthContext";
+import { setInteraction } from "../lib/interactionCache";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
 import { timeAgo, fullDate } from "../lib/formatters";
 import { parseImageUrls } from "../lib/parseImageUrls";
 import { ImageCarousel, Lightbox, DetailVideoPlayer } from "../components/MediaViewer";
 import { isVideo } from "../lib/parseImageUrls";
 import { HammerIcon, TailIcon, CommentIcon } from "../components/Icons";
+import MentionText from "../components/MentionText";
+import MentionAutocomplete, { extractMentionQuery } from "../components/MentionAutocomplete";
 import type { Comment } from "../lib/types";
 import { PostDetailSkeleton } from "../components/Skeleton";
 
@@ -52,6 +56,155 @@ interface PostData {
   quote_post: QuotePost | null;
 }
 
+const SCREEN_WIDTH = Dimensions.get("window").width;
+const QUOTE_MAX_HEIGHT = 500;
+const QUOTE_IMAGE_WIDTH = SCREEN_WIDTH - 2 * spacing.md - 2;
+
+const QuoteImage = React.memo(function QuoteImage({ uri }: { uri: string }) {
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    const { Image: RNImage } = require("react-native");
+    RNImage.getSize(
+      uri,
+      (w: number, h: number) => {
+        const natural = Math.round(QUOTE_IMAGE_WIDTH * (h / w));
+        setHeight(Math.min(natural, QUOTE_MAX_HEIGHT));
+      },
+      () => setHeight(200)
+    );
+  }, [uri]);
+
+  if (!height) return null;
+
+  return (
+    <Image
+      source={{ uri }}
+      style={{ width: "100%", height, backgroundColor: colors.card }}
+      contentFit="cover"
+      transition={0}
+    />
+  );
+});
+
+// Static post content — memoized so interaction state changes don't remount images/text
+const PostDetailBody = React.memo(function PostDetailBody({
+  post,
+  navigation,
+  setLightboxIndex,
+}: {
+  post: PostData;
+  navigation: Nav;
+  setLightboxIndex: (i: number) => void;
+}) {
+  const avatarSource = React.useMemo(() => post.profiles?.avatar_url ? { uri: post.profiles.avatar_url } : null, [post.profiles?.avatar_url]);
+  const allUrls = React.useMemo(() => parseImageUrls(post.image_url), [post.image_url]);
+  const videos = React.useMemo(() => allUrls.filter(isVideo), [allUrls]);
+  const images = React.useMemo(() => allUrls.filter((u) => !isVideo(u)), [allUrls]);
+
+  return (
+    <View>
+      <View style={styles.authorRow}>
+        <Pressable onPress={() => post.profiles?.username && navigation.navigate("UserProfile", { username: post.profiles.username })}>
+          {avatarSource ? (
+            <Image source={avatarSource} style={styles.authorAvatar} contentFit="cover" transition={0} />
+          ) : (
+            <View style={styles.authorAvatarPlaceholder}>
+              <Text style={styles.authorAvatarLetter}>{post.profiles?.username?.[0]?.toUpperCase() || "?"}</Text>
+            </View>
+          )}
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.authorName}>{post.profiles?.name || post.profiles?.username || "anonymous"}</Text>
+          <Text style={styles.authorUsername}>@{post.profiles?.username || "user"}</Text>
+        </View>
+      </View>
+
+      {post.content ? <MentionText text={post.content} style={styles.postContent} /> : null}
+
+      {allUrls.length > 0 && (
+        <View style={styles.mediaSection}>
+          {videos.map((v, i) => <DetailVideoPlayer key={`v-${i}`} url={v} />)}
+          {images.length > 0 && <ImageCarousel urls={images} onOpenLightbox={setLightboxIndex} />}
+        </View>
+      )}
+
+      {post.quote_post && (
+        <Pressable style={styles.quoteCard} onPress={() => navigation.push("PostDetail", { postId: post.quote_post!.id })}>
+          <View style={styles.quoteHeader}>
+            {post.quote_post.profiles?.avatar_url ? (
+              <Image source={{ uri: post.quote_post.profiles.avatar_url }} style={styles.quoteAvatar} contentFit="cover" transition={0} />
+            ) : (
+              <View style={styles.quoteAvatarPlaceholder}>
+                <Text style={styles.quoteAvatarLetter}>{post.quote_post.profiles?.username?.[0]?.toUpperCase() || "?"}</Text>
+              </View>
+            )}
+            <Text style={styles.quoteName} numberOfLines={1}>{post.quote_post.profiles?.name || post.quote_post.profiles?.username || "user"}</Text>
+            <Text style={styles.quoteTime}>{timeAgo(post.quote_post.created_at)}</Text>
+          </View>
+          {post.quote_post.content && <MentionText text={post.quote_post.content} style={styles.quoteContent} numberOfLines={4} />}
+          {post.quote_post.image_url && parseImageUrls(post.quote_post.image_url).length > 0 && (
+            <QuoteImage uri={parseImageUrls(post.quote_post.image_url)[0]} />
+          )}
+        </Pressable>
+      )}
+
+      <Text style={styles.timestamp}>{fullDate(post.created_at)}</Text>
+    </View>
+  );
+}, (prev, next) => prev.post.id === next.post.id);
+
+// Action bar — only this re-renders on like/tail
+const PostDetailActions = React.memo(function PostDetailActions({
+  liked, likeCount, tailed, tailCount, commentCount, onLike, onTail,
+}: {
+  liked: boolean; likeCount: number; tailed: boolean; tailCount: number; commentCount: number;
+  onLike: () => void; onTail: () => void;
+}) {
+  return (
+    <View>
+      <View style={styles.statsBar}>
+        <Text style={styles.stat}><Text style={styles.statBold}>{likeCount}</Text> {likeCount === 1 ? "hammer" : "hammers"}</Text>
+        <Text style={styles.stat}><Text style={styles.statBold}>{tailCount}</Text> {tailCount === 1 ? "tail" : "tails"}</Text>
+        <Text style={styles.stat}><Text style={styles.statBold}>{commentCount}</Text> comments</Text>
+      </View>
+      <View style={styles.actionBar}>
+        <Pressable onPress={onLike} style={styles.actionItem} hitSlop={12}>
+          <HammerIcon size={22} color={liked ? colors.emerald : colors.textMuted} filled={liked} />
+          <Text style={[styles.actionLabel, liked && { color: colors.emerald }]}>Hammer</Text>
+        </Pressable>
+        <Pressable onPress={onTail} style={styles.actionItem} hitSlop={12}>
+          <TailIcon size={22} color={tailed ? colors.emerald : colors.textMuted} />
+          <Text style={[styles.actionLabel, tailed && { color: colors.emerald }]}>Tail</Text>
+        </Pressable>
+        <View style={styles.actionItem}>
+          <CommentIcon size={22} color={colors.textMuted} />
+          <Text style={styles.actionLabel}>Comment</Text>
+        </View>
+      </View>
+    </View>
+  );
+});
+
+// Wrapper that composes body + actions — keeps FlatList header stable
+function PostDetailHeader({ post, navigation, setLightboxIndex, liked, likeCount, tailed, tailCount, commentCount, onLike, onTail }: {
+  post: PostData; navigation: Nav; setLightboxIndex: (i: number) => void;
+  liked: boolean; likeCount: number; tailed: boolean; tailCount: number; commentCount: number;
+  onLike: () => void; onTail: () => void;
+}) {
+  return (
+    <View>
+      <PostDetailBody post={post} navigation={navigation} setLightboxIndex={setLightboxIndex} />
+      <PostDetailActions liked={liked} likeCount={likeCount} tailed={tailed} tailCount={tailCount} commentCount={commentCount} onLike={onLike} onTail={onTail} />
+      {commentCount > 0 && (
+        <View style={styles.commentsHeader}>
+          <Text style={styles.commentsHeaderText}>Comments</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function PostDetailScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<Nav>();
@@ -68,6 +221,7 @@ export default function PostDetailScreen() {
   const [tailCount, setTailCount] = useState(0);
 
   const [commentText, setCommentText] = useState("");
+  const [commentCursor, setCommentCursor] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [replyingTo, setReplyingTo] = useState<{ id: string; username: string } | null>(null);
 
@@ -159,28 +313,36 @@ export default function PostDetailScreen() {
   }, [params.postId]);
 
   const handleLike = useCallback(async () => {
-    if (!user) return;
+    if (!user || !post) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (liked) {
-      setLiked(false); setLikeCount((c) => c - 1);
-      await supabase.from("likes").delete().eq("post_id", post!.id).eq("user_id", user.id);
+      const newCount = Math.max(0, likeCount - 1);
+      setLiked(false); setLikeCount(newCount);
+      setInteraction(post.id, { liked: false, likeCount: newCount, tailed, tailCount });
+      await supabase.from("likes").delete().eq("post_id", post.id).eq("user_id", user.id);
     } else {
-      setLiked(true); setLikeCount((c) => c + 1);
-      await supabase.from("likes").insert({ post_id: post!.id, user_id: user.id });
+      const newCount = likeCount + 1;
+      setLiked(true); setLikeCount(newCount);
+      setInteraction(post.id, { liked: true, likeCount: newCount, tailed, tailCount });
+      await supabase.from("likes").insert({ post_id: post.id, user_id: user.id });
     }
-  }, [liked, user, post]);
+  }, [liked, likeCount, tailed, tailCount, user, post]);
 
   const handleTail = useCallback(async () => {
-    if (!user) return;
+    if (!user || !post) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (tailed) {
-      setTailed(false); setTailCount((c) => c - 1);
-      await supabase.from("tails").delete().eq("post_id", post!.id).eq("user_id", user.id);
+      const newCount = Math.max(0, tailCount - 1);
+      setTailed(false); setTailCount(newCount);
+      setInteraction(post.id, { liked, likeCount, tailed: false, tailCount: newCount });
+      await supabase.from("tails").delete().eq("post_id", post.id).eq("user_id", user.id);
     } else {
-      setTailed(true); setTailCount((c) => c + 1);
-      await supabase.from("tails").insert({ post_id: post!.id, user_id: user.id });
+      const newCount = tailCount + 1;
+      setTailed(true); setTailCount(newCount);
+      setInteraction(post.id, { liked, likeCount, tailed: true, tailCount: newCount });
+      await supabase.from("tails").insert({ post_id: post.id, user_id: user.id });
     }
-  }, [tailed, user, post]);
+  }, [tailed, liked, likeCount, tailCount, user, post]);
 
   const handleComment = useCallback(async () => {
     if (!user || !commentText.trim() || submitting) return;
@@ -227,6 +389,18 @@ export default function PostDetailScreen() {
     setSubmitting(false);
   }, [commentText, user, replyingTo, submitting]);
 
+  const handleCommentMentionSelect = useCallback((username: string) => {
+    const textUpToCursor = commentText.slice(0, commentCursor);
+    const replaced = textUpToCursor.replace(/@[a-zA-Z0-9_-]*$/, `@${username} `);
+    const newText = replaced + commentText.slice(commentCursor);
+    setCommentText(newText);
+    const newCursor = replaced.length;
+    setCommentCursor(newCursor);
+    setTimeout(() => {
+      inputRef.current?.setNativeProps({ selection: { start: newCursor, end: newCursor } });
+    }, 50);
+  }, [commentText, commentCursor]);
+
   const imageUrls = parseImageUrls(post?.image_url).filter(
     (u) => !/\.(mp4|mov|webm|m4v)/i.test(u) && !u.includes("video")
   );
@@ -247,144 +421,6 @@ export default function PostDetailScreen() {
     );
   }
 
-  const renderComment = ({ item: comment }: { item: Comment }) => (
-    <View>
-      <CommentRow
-        comment={comment}
-        onReply={(username) => {
-          setReplyingTo({ id: comment.id, username });
-          inputRef.current?.focus();
-        }}
-        onUserPress={(username) => navigation.navigate("UserProfile", { username })}
-      />
-      {/* Nested replies */}
-      {comment.replies && comment.replies.length > 0 && (
-        <View style={styles.repliesContainer}>
-          {comment.replies.map((reply) => (
-            <CommentRow
-              key={reply.id}
-              comment={reply}
-              isReply
-              onReply={(username) => {
-                setReplyingTo({ id: comment.id, username });
-                inputRef.current?.focus();
-              }}
-              onUserPress={(username) => navigation.navigate("UserProfile", { username })}
-            />
-          ))}
-        </View>
-      )}
-    </View>
-  );
-
-  const ListHeader = () => (
-    <View>
-      {/* Author */}
-      <View style={styles.authorRow}>
-        <Pressable onPress={() => post.profiles?.username && navigation.navigate("UserProfile", { username: post.profiles.username })}>
-          {post.profiles?.avatar_url ? (
-            <Image source={{ uri: post.profiles.avatar_url }} style={styles.authorAvatar} contentFit="cover" />
-          ) : (
-            <View style={styles.authorAvatarPlaceholder}>
-              <Text style={styles.authorAvatarLetter}>{post.profiles?.username?.[0]?.toUpperCase() || "?"}</Text>
-            </View>
-          )}
-        </Pressable>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.authorName}>{post.profiles?.name || post.profiles?.username || "anonymous"}</Text>
-          <Text style={styles.authorUsername}>@{post.profiles?.username || "user"}</Text>
-        </View>
-      </View>
-
-      {/* Content */}
-      {post.content ? <Text style={styles.postContent}>{post.content}</Text> : null}
-
-      {/* Media — videos get full native player, images get carousel */}
-      {parseImageUrls(post.image_url).length > 0 && (() => {
-        const allUrls = parseImageUrls(post.image_url);
-        const videos = allUrls.filter(isVideo);
-        const images = allUrls.filter((u) => !isVideo(u));
-        return (
-          <View style={styles.mediaSection}>
-            {videos.map((v, i) => (
-              <DetailVideoPlayer key={`v-${i}`} url={v} />
-            ))}
-            {images.length > 0 && (
-              <ImageCarousel urls={images} onOpenLightbox={setLightboxIndex} />
-            )}
-          </View>
-        );
-      })()}
-
-      {/* Quoted post (Tail Spin) */}
-      {post.quote_post && (
-        <Pressable
-          style={styles.quoteCard}
-          onPress={() => navigation.push("PostDetail", { postId: post.quote_post!.id })}
-        >
-          <View style={styles.quoteHeader}>
-            {post.quote_post.profiles?.avatar_url ? (
-              <Image source={{ uri: post.quote_post.profiles.avatar_url }} style={styles.quoteAvatar} contentFit="cover" />
-            ) : (
-              <View style={styles.quoteAvatarPlaceholder}>
-                <Text style={styles.quoteAvatarLetter}>
-                  {post.quote_post.profiles?.username?.[0]?.toUpperCase() || "?"}
-                </Text>
-              </View>
-            )}
-            <Text style={styles.quoteName} numberOfLines={1}>
-              {post.quote_post.profiles?.name || post.quote_post.profiles?.username || "user"}
-            </Text>
-            <Text style={styles.quoteTime}>{timeAgo(post.quote_post.created_at)}</Text>
-          </View>
-          {post.quote_post.content && (
-            <Text style={styles.quoteContent} numberOfLines={4}>{post.quote_post.content}</Text>
-          )}
-          {post.quote_post.image_url && parseImageUrls(post.quote_post.image_url).length > 0 && (
-            <Image
-              source={{ uri: parseImageUrls(post.quote_post.image_url)[0] }}
-              style={styles.quoteImage}
-              contentFit="cover"
-            />
-          )}
-        </Pressable>
-      )}
-
-      {/* Timestamp */}
-      <Text style={styles.timestamp}>{fullDate(post.created_at)}</Text>
-
-      {/* Stats bar */}
-      <View style={styles.statsBar}>
-        <Text style={styles.stat}><Text style={styles.statBold}>{likeCount}</Text> {likeCount === 1 ? "hammer" : "hammers"}</Text>
-        <Text style={styles.stat}><Text style={styles.statBold}>{tailCount}</Text> {tailCount === 1 ? "tail" : "tails"}</Text>
-        <Text style={styles.stat}><Text style={styles.statBold}>{comments.length}</Text> comments</Text>
-      </View>
-
-      {/* Action buttons */}
-      <View style={styles.actionBar}>
-        <Pressable onPress={handleLike} style={styles.actionItem} hitSlop={12}>
-          <HammerIcon size={22} color={liked ? colors.emerald : colors.textMuted} filled={liked} />
-          <Text style={[styles.actionLabel, liked && { color: colors.emerald }]}>Hammer</Text>
-        </Pressable>
-        <Pressable onPress={handleTail} style={styles.actionItem} hitSlop={12}>
-          <TailIcon size={22} color={tailed ? colors.emerald : colors.textMuted} />
-          <Text style={[styles.actionLabel, tailed && { color: colors.emerald }]}>Tail</Text>
-        </Pressable>
-        <View style={styles.actionItem}>
-          <CommentIcon size={22} color={colors.textMuted} />
-          <Text style={styles.actionLabel}>Comment</Text>
-        </View>
-      </View>
-
-      {/* Comments header */}
-      {comments.length > 0 && (
-        <View style={styles.commentsHeader}>
-          <Text style={styles.commentsHeaderText}>Comments</Text>
-        </View>
-      )}
-    </View>
-  );
-
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -393,9 +429,49 @@ export default function PostDetailScreen() {
     >
       <FlatList
         data={comments}
-        renderItem={renderComment}
+        renderItem={({ item: comment }) => (
+          <View>
+            <CommentRow
+              comment={comment}
+              onReply={(username) => {
+                setReplyingTo({ id: comment.id, username });
+                inputRef.current?.focus();
+              }}
+              onUserPress={(username) => navigation.navigate("UserProfile", { username })}
+            />
+            {comment.replies && comment.replies.length > 0 && (
+              <View style={styles.repliesContainer}>
+                {comment.replies.map((reply) => (
+                  <CommentRow
+                    key={reply.id}
+                    comment={reply}
+                    isReply
+                    onReply={(username) => {
+                      setReplyingTo({ id: comment.id, username });
+                      inputRef.current?.focus();
+                    }}
+                    onUserPress={(username) => navigation.navigate("UserProfile", { username })}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
+        )}
         keyExtractor={(item) => item.id}
-        ListHeaderComponent={ListHeader}
+        ListHeaderComponent={
+          <PostDetailHeader
+            post={post}
+            navigation={navigation}
+            setLightboxIndex={setLightboxIndex}
+            liked={liked}
+            likeCount={likeCount}
+            tailed={tailed}
+            tailCount={tailCount}
+            commentCount={comments.length}
+            onLike={handleLike}
+            onTail={handleTail}
+          />
+        }
         ListEmptyComponent={
           <View style={styles.emptyComments}>
             <Text style={styles.emptyText}>No comments yet. Be the first!</Text>
@@ -403,6 +479,13 @@ export default function PostDetailScreen() {
         }
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+      />
+
+      {/* Mention autocomplete — above input bar */}
+      <MentionAutocomplete
+        text={commentText}
+        cursorPosition={commentCursor}
+        onSelect={handleCommentMentionSelect}
       />
 
       {/* Comment input — pinned to bottom */}
@@ -421,6 +504,7 @@ export default function PostDetailScreen() {
             style={styles.input}
             value={commentText}
             onChangeText={setCommentText}
+            onSelectionChange={(e) => setCommentCursor(e.nativeEvent.selection.end)}
             placeholder={replyingTo ? `Reply to @${replyingTo.username}...` : "Add a comment..."}
             placeholderTextColor={colors.textMuted}
             maxLength={500}
@@ -479,7 +563,7 @@ function CommentRow({
           <Text style={styles.commentTime}>{timeAgo(comment.created_at)}</Text>
         </View>
         {comment.content && comment.content !== "[GIF]" && (
-          <Text style={styles.commentContent}>{comment.content}</Text>
+          <MentionText text={comment.content} style={styles.commentContent} />
         )}
         {comment.gif_url && (
           <Image source={{ uri: comment.gif_url }} style={styles.commentGif} contentFit="cover" />

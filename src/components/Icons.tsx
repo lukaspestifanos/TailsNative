@@ -113,6 +113,42 @@ export function ChevronRight({ size = 16, color }: IconProps) {
   );
 }
 
+export function PlusIcon({ size = 22, color }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round">
+      <Path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function ImageIcon({ size = 20, color }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+      <Rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <Circle cx="8.5" cy="8.5" r="1.5" />
+      <Path d="M21 15l-5-5L5 21" />
+    </Svg>
+  );
+}
+
+export function MoreIcon({ size = 18, color }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Circle cx="12" cy="5" r="1.5" />
+      <Circle cx="12" cy="12" r="1.5" />
+      <Circle cx="12" cy="19" r="1.5" />
+    </Svg>
+  );
+}
+
+export function CloseIcon({ size = 20, color }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round">
+      <Path d="M18 6L6 18M6 6l12 12" />
+    </Svg>
+  );
+}
+
 export function BackArrow({ size = 22, color }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2}>

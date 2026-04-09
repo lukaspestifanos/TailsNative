@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "social.tails.app"
+      "bundleIdentifier": "social.tails.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "social.tails.app",
@@ -31,7 +34,26 @@
     "plugins": [
       "expo-secure-store",
       "expo-web-browser",
-      "expo-video"
-    ]
+      "expo-video",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#10b981"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "16f49f0f-93d3-4153-8697-80f0cc5e8b6b"
+      }
+    },
+    "owner": "lukaspestifanos",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/16f49f0f-93d3-4153-8697-80f0cc5e8b6b"
+    }
   }
 }
