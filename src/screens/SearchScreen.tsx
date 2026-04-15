@@ -127,7 +127,7 @@ function GameRow({ game, onPress }: { game: any; onPress: () => void }) {
 export default function SearchScreen() {
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, blockedIds } = useAuth();
 
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<SearchTab>("top");
@@ -268,7 +268,7 @@ export default function SearchScreen() {
                 .limit(20),
         ]);
 
-        setPeople(peopleRes.data || []);
+        setPeople((peopleRes.data || []).filter((p: any) => !blockedIds.has(p.id)));
 
         // Enrich posts with profiles
         const postRows = postsRes.data || [];

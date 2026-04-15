@@ -1,7 +1,6 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import { View, Text, StyleSheet } from "react-native";
 import { colors, fontSize } from "../lib/theme";
 import { useAuth } from "../lib/AuthContext";
 import { FeedIcon, GamesIcon, SearchIcon, MessagesIcon, NotificationsIcon, ProfileIcon } from "../components/Icons";
@@ -143,15 +142,7 @@ function MainTabs() {
 
 // Root navigator — auth gate + stack for drill-in screens
 export default function AppNavigator() {
-  const { session, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={loadingStyles.container}>
-        <Text style={loadingStyles.logo}>Tails</Text>
-      </View>
-    );
-  }
+  const { session } = useAuth();
 
   return (
     <Stack.Navigator
@@ -296,16 +287,3 @@ export default function AppNavigator() {
   );
 }
 
-const loadingStyles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.black,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  logo: {
-    fontSize: 36,
-    fontWeight: "800",
-    color: colors.emerald,
-  },
-});

@@ -10,18 +10,23 @@ import {
   Platform,
   ScrollView,
   Alert,
+  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import * as Device from "expo-device";
 import * as Application from "expo-application";
 import * as WebBrowser from "expo-web-browser";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { makeRedirectUri } from "expo-auth-session";
 import Svg, { Path } from "react-native-svg";
 import { supabase, SUPABASE_URL } from "../lib/supabase";
 import { colors, fontSize, spacing, radius } from "../lib/theme";
 
 type Mode = "welcome" | "login" | "register";
+
+const TERMS_URL = "https://www.tails.social/terms";
+const PRIVACY_URL = "https://www.tails.social/privacy";
 
 async function getDeviceInfo() {
   let deviceId: string | null = null;
@@ -58,6 +63,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const navigation = useNavigation();
@@ -65,6 +71,89 @@ export default function LoginScreen() {
   const confirmRef = useRef<TextInput>(null);
 
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
+
+  React.useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    AppleAuthentication.isAvailableAsync().then(setAppleAvailable).catch(() => setAppleAvailable(false));
+  }, []);
+
+  const handleAppleSignIn = async () => {
+    setAppleLoading(true);
+    setError("");
+
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        setError("Apple sign-in failed: no identity token returned.");
+        setAppleLoading(false);
+        return;
+      }
+
+      const { data: sessionData, error: sessionErr } = await supabase.auth.signInWithIdToken({
+        provider: "apple",
+        token: credential.identityToken,
+      });
+
+      if (sessionErr) {
+        setError(sessionErr.message);
+        setAppleLoading(false);
+        return;
+      }
+
+      // If Apple gave us a name (only on first sign-in), persist it on the profile
+      if (sessionData.user && credential.fullName) {
+        const fullName = [credential.fullName.givenName, credential.fullName.familyName]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        if (fullName) {
+          try {
+            await supabase
+              .from("profiles")
+              .update({ name: fullName })
+              .eq("id", sessionData.user.id)
+              .is("name", null);
+          } catch {}
+        }
+      }
+
+      // Register device fingerprint
+      if (sessionData.user) {
+        const device = await getDeviceInfo();
+        try {
+          await supabase.from("device_fingerprints").upsert({
+            user_id: sessionData.user.id,
+            device_id: device.deviceId,
+            device_model: device.deviceModel,
+            os_name: device.osName,
+            os_version: device.osVersion,
+            app_version: Application.nativeApplicationVersion || "1.0.0",
+            is_emulator: device.isEmulator,
+            last_seen_at: new Date().toISOString(),
+          }, { onConflict: "user_id,device_id" });
+        } catch {}
+      }
+
+      setAppleLoading(false);
+      dismiss();
+    } catch (e: any) {
+      // User canceled — not an error
+      if (e?.code === "ERR_REQUEST_CANCELED") {
+        setAppleLoading(false);
+        return;
+      }
+      setError(e.message || "Apple sign-in failed.");
+      setAppleLoading(false);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
@@ -166,6 +255,7 @@ export default function LoginScreen() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimEmail)) { setError("Enter a valid email address."); return; }
     if (trimPassword.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (trimPassword !== confirmPassword.trim()) { setError("Passwords don't match."); return; }
+    if (!agreedToTerms) { setError("You must agree to the Terms of Service and Privacy Policy."); return; }
 
     setLoading(true);
 
@@ -376,6 +466,16 @@ export default function LoginScreen() {
             </Text>
 
             <View style={styles.buttonGroup}>
+              {appleAvailable && (
+                <AppleAuthentication.AppleAuthenticationButton
+                  buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                  buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                  cornerRadius={radius.lg}
+                  style={styles.appleBtn}
+                  onPress={handleAppleSignIn}
+                />
+              )}
+
               <Pressable
                 style={({ pressed }) => [styles.googleBtn, pressed && styles.btnPressed]}
                 onPress={handleGoogleSignIn}
@@ -418,8 +518,16 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          <Text style={styles.footer}>
-            Share slips. Track picks. Build your record.
+          <Text style={styles.legalText}>
+            By continuing, you agree to our{" "}
+            <Text style={styles.legalLink} onPress={() => Linking.openURL(TERMS_URL)}>
+              Terms of Service
+            </Text>{" "}
+            and{" "}
+            <Text style={styles.legalLink} onPress={() => Linking.openURL(PRIVACY_URL)}>
+              Privacy Policy
+            </Text>
+            .
           </Text>
         </View>
       </SafeAreaView>
@@ -507,6 +615,30 @@ export default function LoginScreen() {
               </View>
             )}
 
+            {isRegister && (
+              <Pressable
+                style={styles.agreeRow}
+                onPress={() => { setAgreedToTerms((v) => !v); setError(""); }}
+                hitSlop={6}
+              >
+                <View style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}>
+                  {agreedToTerms && <Text style={styles.checkboxMark}>✓</Text>}
+                </View>
+                <Text style={styles.agreeText}>
+                  I agree to the{" "}
+                  <Text style={styles.agreeLink} onPress={() => Linking.openURL(TERMS_URL)}>
+                    Terms of Service
+                  </Text>{" "}
+                  and{" "}
+                  <Text style={styles.agreeLink} onPress={() => Linking.openURL(PRIVACY_URL)}>
+                    Privacy Policy
+                  </Text>
+                  . I understand Tails has zero tolerance for objectionable content or abusive
+                  behavior.
+                </Text>
+              </Pressable>
+            )}
+
             <View style={styles.buttonGroup}>
               <Pressable
                 style={({ pressed }) => [styles.primaryBtn, pressed && styles.btnPressed, loading && styles.btnDisabled]}
@@ -528,6 +660,16 @@ export default function LoginScreen() {
               <Text style={styles.dividerText}>or</Text>
               <View style={styles.dividerLine} />
             </View>
+
+            {appleAvailable && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+                cornerRadius={radius.lg}
+                style={[styles.appleBtn, { marginBottom: spacing.md }]}
+                onPress={handleAppleSignIn}
+              />
+            )}
 
             <Pressable
               style={({ pressed }) => [styles.googleBtn, pressed && styles.btnPressed]}
@@ -680,6 +822,10 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: "700",
   },
+  appleBtn: {
+    width: "100%",
+    height: 48,
+  },
   googleBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -755,5 +901,55 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     marginTop: 40,
     textAlign: "center",
+  },
+  legalText: {
+    fontSize: 11,
+    color: colors.textDim,
+    marginTop: 32,
+    textAlign: "center",
+    lineHeight: 16,
+    paddingHorizontal: spacing.lg,
+  },
+  legalLink: {
+    color: colors.emerald,
+    fontWeight: "600",
+  },
+  agreeRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 1,
+  },
+  checkboxChecked: {
+    backgroundColor: colors.emerald,
+    borderColor: colors.emerald,
+  },
+  checkboxMark: {
+    color: colors.black,
+    fontSize: 13,
+    fontWeight: "800",
+    lineHeight: 14,
+  },
+  agreeText: {
+    flex: 1,
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: 16,
+  },
+  agreeLink: {
+    color: colors.emerald,
+    fontWeight: "600",
   },
 });

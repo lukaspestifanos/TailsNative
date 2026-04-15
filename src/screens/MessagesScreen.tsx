@@ -48,7 +48,7 @@ function formatRelative(timestamp: string): string {
 
 export default function MessagesScreen() {
   const navigation = useNavigation<Nav>();
-  const { session, user, profile } = useAuth();
+  const { session, user, profile, blockedIds } = useAuth();
   const [conversations, setConversations] = useState<ConversationPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -124,10 +124,20 @@ export default function MessagesScreen() {
         return { id: c.id, type: c.type, name: c.name, updated_at: c.updated_at, participants: parts, last_message: lastMsg, unread };
       });
 
-      setConversations(items);
+      // Hide DMs entirely if the other participant is blocked.
+      // For groups, hide if ALL non-self participants are blocked (otherwise still show).
+      const filtered = items.filter((c) => {
+        if (c.participants.length === 0) return true;
+        if (c.type === "dm") {
+          return !c.participants.some((p: any) => blockedIds.has(p.id));
+        }
+        return !c.participants.every((p: any) => blockedIds.has(p.id));
+      });
+
+      setConversations(filtered);
     } catch {}
     if (!silent) setLoading(false);
-  }, [user]);
+  }, [user, blockedIds]);
 
   useEffect(() => {
     if (user && !isGuest) {

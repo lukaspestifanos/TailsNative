@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Animated,
 } from "react-native";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
@@ -208,7 +209,7 @@ function PostDetailHeader({ post, navigation, setLightboxIndex, liked, likeCount
 export default function PostDetailScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<Nav>();
-  const { user } = useAuth();
+  const { user, blockedIds } = useAuth();
   const inputRef = useRef<TextInput>(null);
 
   const [post, setPost] = useState<PostData | null>(null);
@@ -240,6 +241,13 @@ export default function PostDetailScreen() {
         .single();
 
       if (!postData) { setLoading(false); return; }
+
+      // Block check: refuse to load posts from blocked users
+      if (blockedIds.has(postData.user_id)) {
+        setPost(null);
+        setLoading(false);
+        return;
+      }
 
       const [profileRes, gameRes, quoteRes] = await Promise.all([
         supabase.from("profiles").select("username, name, avatar_url").eq("id", postData.user_id).single(),
@@ -283,8 +291,27 @@ export default function PostDetailScreen() {
       setLikeCount(likesRes.count ?? 0);
       setTailCount(tailsRes.count ?? 0);
 
-      // Thread comments
-      const flat = (commentsRes.data as unknown as Comment[]) || [];
+      // Thread comments — filter out blocked users
+      const flatRaw = (commentsRes.data as unknown as Comment[]) || [];
+      const flat = flatRaw.filter((c: any) => !blockedIds.has(c.user_id));
+
+      // Fetch like/tail counts for all comments in parallel
+      const commentIds = flat.map((c) => c.id);
+      if (commentIds.length > 0) {
+        const [clRes, ctRes] = await Promise.all([
+          supabase.from("comment_likes").select("comment_id").in("comment_id", commentIds),
+          supabase.from("comment_tails").select("comment_id").in("comment_id", commentIds),
+        ]);
+        const likeCounts: Record<string, number> = {};
+        const tailCounts: Record<string, number> = {};
+        (clRes.data || []).forEach((r: any) => { likeCounts[r.comment_id] = (likeCounts[r.comment_id] || 0) + 1; });
+        (ctRes.data || []).forEach((r: any) => { tailCounts[r.comment_id] = (tailCounts[r.comment_id] || 0) + 1; });
+        for (const c of flat) {
+          c.likes_count = likeCounts[c.id] || 0;
+          c.tails_count = tailCounts[c.id] || 0;
+        }
+      }
+
       const top: Comment[] = [];
       const byParent: Record<string, Comment[]> = {};
       for (const c of flat) {
@@ -544,6 +571,74 @@ function CommentRow({
   onReply: (username: string) => void;
   onUserPress: (username: string) => void;
 }) {
+  const { user } = useAuth();
+  const [cLiked, setCLiked] = useState(false);
+  const [cLikeCount, setCLikeCount] = useState(comment.likes_count ?? 0);
+  const [cTailed, setCTailed] = useState(false);
+  const [cTailCount, setCTailCount] = useState(comment.tails_count ?? 0);
+
+  const hammerAnim = useRef(new Animated.Value(0)).current;
+  const tailRotateAnim = useRef(new Animated.Value(0)).current;
+  const tailScaleAnim = useRef(new Animated.Value(1)).current;
+
+  // Check if current user has liked/tailed this comment
+  useEffect(() => {
+    if (!user) return;
+    Promise.all([
+      supabase.from("comment_likes").select("id").eq("comment_id", comment.id).eq("user_id", user.id).maybeSingle(),
+      supabase.from("comment_tails").select("id").eq("comment_id", comment.id).eq("user_id", user.id).maybeSingle(),
+    ]).then(([likeRes, tailRes]) => {
+      setCLiked(!!likeRes.data);
+      setCTailed(!!tailRes.data);
+    });
+  }, [comment.id, user?.id]);
+
+  const handleCommentLike = useCallback(async () => {
+    if (!user) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (cLiked) {
+      setCLiked(false);
+      setCLikeCount((c) => Math.max(0, c - 1));
+      await supabase.from("comment_likes").delete().eq("comment_id", comment.id).eq("user_id", user.id);
+    } else {
+      setCLiked(true);
+      setCLikeCount((c) => c + 1);
+      hammerAnim.setValue(0);
+      Animated.sequence([
+        Animated.timing(hammerAnim, { toValue: 1, duration: 140, useNativeDriver: true }),
+        Animated.timing(hammerAnim, { toValue: 1, duration: 70, useNativeDriver: true }),
+        Animated.timing(hammerAnim, { toValue: 0, duration: 140, useNativeDriver: true }),
+      ]).start();
+      await supabase.from("comment_likes").insert({ comment_id: comment.id, user_id: user.id });
+    }
+  }, [cLiked, comment.id, user]);
+
+  const handleCommentTail = useCallback(async () => {
+    if (!user) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (cTailed) {
+      setCTailed(false);
+      setCTailCount((c) => Math.max(0, c - 1));
+      await supabase.from("comment_tails").delete().eq("comment_id", comment.id).eq("user_id", user.id);
+    } else {
+      setCTailed(true);
+      setCTailCount((c) => c + 1);
+      tailRotateAnim.setValue(0);
+      tailScaleAnim.setValue(1);
+      Animated.parallel([
+        Animated.timing(tailRotateAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.sequence([
+          Animated.timing(tailScaleAnim, { toValue: 1.3, duration: 250, useNativeDriver: true }),
+          Animated.timing(tailScaleAnim, { toValue: 1, duration: 250, useNativeDriver: true }),
+        ]),
+      ]).start();
+      await supabase.from("comment_tails").insert({ comment_id: comment.id, user_id: user.id });
+    }
+  }, [cTailed, comment.id, user]);
+
+  const hammerRotate = hammerAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "20deg"] });
+  const tailSpin = tailRotateAnim.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
+
   return (
     <View style={[styles.commentRow, isReply && styles.commentReply]}>
       <Pressable onPress={() => comment.profiles?.username && onUserPress(comment.profiles.username)}>
@@ -568,9 +663,32 @@ function CommentRow({
         {comment.gif_url && (
           <Image source={{ uri: comment.gif_url }} style={styles.commentGif} contentFit="cover" />
         )}
-        <Pressable onPress={() => onReply(comment.profiles?.username || "anonymous")} hitSlop={8}>
-          <Text style={styles.replyBtn}>Reply{comment.replies && comment.replies.length > 0 ? ` (${comment.replies.length})` : ""}</Text>
-        </Pressable>
+        <View style={styles.commentActions}>
+          <Pressable onPress={handleCommentLike} hitSlop={8} style={styles.commentActionBtn}>
+            <Animated.View style={{ transform: [{ rotate: hammerRotate }] }}>
+              <HammerIcon size={14} color={cLiked ? colors.emerald : colors.textMuted} filled={cLiked} />
+            </Animated.View>
+            {cLikeCount > 0 && (
+              <Text style={[styles.commentActionCount, cLiked && styles.commentActionActive]}>{cLikeCount}</Text>
+            )}
+          </Pressable>
+
+          <Pressable onPress={handleCommentTail} hitSlop={8} style={styles.commentActionBtn}>
+            <Animated.View style={{ transform: [{ rotate: tailSpin }, { scale: tailScaleAnim }] }}>
+              <TailIcon size={14} color={cTailed ? colors.emerald : colors.textMuted} />
+            </Animated.View>
+            {cTailCount > 0 && (
+              <Text style={[styles.commentActionCount, cTailed && styles.commentActionActive]}>{cTailCount}</Text>
+            )}
+          </Pressable>
+
+          <Pressable onPress={() => onReply(comment.profiles?.username || "anonymous")} hitSlop={8} style={styles.commentActionBtn}>
+            <CommentIcon size={14} color={colors.textMuted} />
+            {comment.replies && comment.replies.length > 0 && (
+              <Text style={styles.commentActionCount}>{comment.replies.length}</Text>
+            )}
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -709,7 +827,25 @@ const styles = StyleSheet.create({
   commentTime: { fontSize: fontSize.xs, color: colors.textMuted },
   commentContent: { fontSize: fontSize.md, color: colors.text, lineHeight: 22 },
   commentGif: { width: 180, height: 120, borderRadius: radius.md, marginTop: 6 },
-  replyBtn: { fontSize: fontSize.xs, color: colors.textMuted, fontWeight: "600", marginTop: 6 },
+  commentActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.lg,
+    marginTop: 8,
+  },
+  commentActionBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  commentActionCount: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontVariant: ["tabular-nums"],
+  },
+  commentActionActive: {
+    color: colors.emerald,
+  },
 
   repliesContainer: {},
 

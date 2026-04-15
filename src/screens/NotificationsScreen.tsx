@@ -79,7 +79,7 @@ function typeColor(type: Notif["type"]): string {
 
 export default function NotificationsScreen() {
   const navigation = useNavigation<Nav>();
-  const { session, user, profile } = useAuth();
+  const { session, user, profile, blockedIds } = useAuth();
 
   const isGuest = !profile?.username;
 
@@ -139,10 +139,11 @@ export default function NotificationsScreen() {
       for (const p of (profiles || []) as any[]) profileMap.set(p.id, { username: p.username, avatar_url: p.avatar_url });
     }
 
-    // Build notification items
+    // Build notification items — skip anything from blocked users
     const items: Notif[] = [];
 
     for (const like of (likesRes.data || []) as any[]) {
+      if (blockedIds.has(like.user_id)) continue;
       const actor = profileMap.get(like.user_id);
       if (!actor) continue;
       const post = postMap.get(like.post_id);
@@ -150,12 +151,14 @@ export default function NotificationsScreen() {
     }
 
     for (const follow of (followsRes.data || []) as any[]) {
+      if (blockedIds.has(follow.follower_id)) continue;
       const actor = profileMap.get(follow.follower_id);
       if (!actor) continue;
       items.push({ id: `follow-${follow.follower_id}`, type: "follow", created_at: follow.created_at, actor });
     }
 
     for (const comment of (commentsRes.data || []) as any[]) {
+      if (blockedIds.has(comment.user_id)) continue;
       const actor = profileMap.get(comment.user_id);
       if (!actor) continue;
       const post = postMap.get(comment.post_id);
@@ -163,6 +166,7 @@ export default function NotificationsScreen() {
     }
 
     for (const tail of (tailsRes.data || []) as any[]) {
+      if (blockedIds.has(tail.user_id)) continue;
       const actor = profileMap.get(tail.user_id);
       if (!actor) continue;
       const post = postMap.get(tail.post_id);
@@ -170,6 +174,7 @@ export default function NotificationsScreen() {
     }
 
     for (const spin of (tailSpinsRes.data || []) as any[]) {
+      if (blockedIds.has(spin.user_id)) continue;
       const actor = profileMap.get(spin.user_id);
       if (!actor) continue;
       const orig = postMap.get(spin.quote_post_id);
@@ -179,7 +184,7 @@ export default function NotificationsScreen() {
     items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     setNotifications(items);
     setLoading(false);
-  }, [user]);
+  }, [user, blockedIds]);
 
   useEffect(() => { loadNotifications(); }, [loadNotifications]);
 

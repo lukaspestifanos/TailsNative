@@ -33,6 +33,7 @@ type Props = {
   profile: ProfileData;
   onClose: () => void;
   onSaved: (updated: { username: string; name: string | null; bio: string | null; avatar_url: string | null }) => void;
+  onDeleteAccount?: () => void;
 };
 
 type UsernameStatus = "idle" | "checking" | "available" | "taken" | "invalid" | "cooldown";
@@ -40,7 +41,7 @@ type UsernameStatus = "idle" | "checking" | "available" | "taken" | "invalid" | 
 const USERNAME_REGEX = /^[a-zA-Z0-9_]+$/;
 const USERNAME_COOLDOWN_DAYS = 14;
 
-export default function EditProfileModal({ visible, profile, onClose, onSaved }: Props) {
+export default function EditProfileModal({ visible, profile, onClose, onSaved, onDeleteAccount }: Props) {
   const [name, setName] = useState(profile.name || "");
   const [username, setUsername] = useState(profile.username);
   const [bio, setBio] = useState(profile.bio || "");
@@ -414,6 +415,22 @@ export default function EditProfileModal({ visible, profile, onClose, onSaved }:
             />
             <Text style={s.charCount}>{bio.length}/160</Text>
           </View>
+
+          {/* Delete Account */}
+          {onDeleteAccount && (
+            <View style={s.dangerZone}>
+              <View style={s.dangerDivider} />
+              <Pressable
+                onPress={onDeleteAccount}
+                style={({ pressed }) => [s.deleteBtn, pressed && s.deleteBtnPressed]}
+              >
+                <Text style={s.deleteBtnText}>Delete Account</Text>
+              </Pressable>
+              <Text style={s.deleteHint}>
+                Permanently delete your account and all associated data. This cannot be undone.
+              </Text>
+            </View>
+          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
@@ -525,4 +542,37 @@ const s = StyleSheet.create({
   },
   usernameSpinner: { marginRight: spacing.md },
   hint: { fontSize: fontSize.xs, marginTop: 4 },
+
+  // Danger zone
+  dangerZone: {
+    marginTop: spacing.xl,
+    paddingTop: spacing.md,
+  },
+  dangerDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginBottom: spacing.lg,
+  },
+  deleteBtn: {
+    paddingVertical: 14,
+    borderRadius: radius.lg,
+    alignItems: "center" as const,
+    borderWidth: 1,
+    borderColor: "rgba(239,68,68,0.4)",
+  },
+  deleteBtnPressed: {
+    opacity: 0.7,
+  },
+  deleteBtnText: {
+    fontSize: fontSize.md,
+    fontWeight: "600" as const,
+    color: "#ef4444",
+  },
+  deleteHint: {
+    fontSize: fontSize.xs,
+    color: colors.textDim,
+    textAlign: "center" as const,
+    marginTop: spacing.sm,
+    lineHeight: 16,
+  },
 });

@@ -104,10 +104,6 @@ function getSummaryUrl(league: string): string | null {
 // Show ALL stat columns — the box score is horizontally scrollable
 // No filtering needed
 
-function formatOdds(n: number): string {
-  return n > 0 ? `+${n}` : `${n}`;
-}
-
 function formatGameTime(iso: string): string {
   if (!iso) return "";
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
@@ -738,29 +734,6 @@ export default function GameDetailScreen() {
           );
         })()}
 
-        {/* Odds */}
-        {(game.spread != null || game.over_under != null || game.home_ml != null) && (
-          <View style={styles.oddsRow}>
-            {game.spread != null && (
-              <View style={styles.oddsPill}>
-                <Text style={styles.oddsLabel}>Spread</Text>
-                <Text style={styles.oddsValue}>{game.spread > 0 ? `+${game.spread}` : game.spread}</Text>
-              </View>
-            )}
-            {game.over_under != null && (
-              <View style={styles.oddsPill}>
-                <Text style={styles.oddsLabel}>O/U</Text>
-                <Text style={styles.oddsValue}>{game.over_under}</Text>
-              </View>
-            )}
-            {game.home_ml != null && game.away_ml != null && (
-              <View style={styles.oddsPill}>
-                <Text style={styles.oddsLabel}>ML</Text>
-                <Text style={styles.oddsValue}>{formatOdds(game.away_ml!)} / {formatOdds(game.home_ml!)}</Text>
-              </View>
-            )}
-          </View>
-        )}
       </View>
 
       {/* Tabs — Posts / Box Score / Plays */}
@@ -1023,25 +996,6 @@ const styles = StyleSheet.create({
   probFillFav: { backgroundColor: colors.emerald, borderTopLeftRadius: 4, borderBottomLeftRadius: 4, overflow: "hidden", position: "relative" as const },
   probFillUnd: { backgroundColor: "#3f3f46", borderTopRightRadius: 4, borderBottomRightRadius: 4 },
   probSweep: { position: "absolute" as const, top: 0, bottom: 0, width: 60, opacity: 0.35, backgroundColor: "#fff", borderRadius: 4 },
-
-  // Odds
-  oddsRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginTop: spacing.md,
-    justifyContent: "center",
-  },
-  oddsPill: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    alignItems: "center",
-  },
-  oddsLabel: { fontSize: 9, color: colors.textDim, fontWeight: "700", textTransform: "uppercase", marginBottom: 1 },
-  oddsValue: { fontSize: fontSize.sm, fontWeight: "700", color: colors.text },
 
   // Tabs
   tabs: {

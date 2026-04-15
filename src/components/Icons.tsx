@@ -65,10 +65,10 @@ export function HammerIcon({ size = 18, color, filled }: IconProps & { filled?: 
         <Rect x="2" y="4" width="14" height="6" rx="1" fill={color} />
         <Line x1="4" y1="7" x2="14" y2="7" stroke="rgba(0,0,0,0.2)" strokeWidth="1" />
         <Path d="M2 6.5L0.5 4.5" stroke={color} strokeWidth="2" strokeLinecap="round" />
-        <Rect x="10" y="10" width="3" height="12" rx="1" fill={color} />
-        <Line x1="10.5" y1="14" x2="12.5" y2="14" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
-        <Line x1="10.5" y1="17" x2="12.5" y2="17" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
-        <Line x1="10.5" y1="20" x2="12.5" y2="20" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
+        <Rect x="7.5" y="10" width="3" height="12" rx="1" fill={color} />
+        <Line x1="8" y1="14" x2="10" y2="14" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
+        <Line x1="8" y1="17" x2="10" y2="17" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
+        <Line x1="8" y1="20" x2="10" y2="20" stroke="rgba(0,0,0,0.15)" strokeWidth="1" />
       </Svg>
     );
   }
@@ -76,10 +76,10 @@ export function HammerIcon({ size = 18, color, filled }: IconProps & { filled?: 
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <Rect x="2" y="4" width="14" height="6" rx="1" stroke={color} strokeWidth="1.5" />
       <Path d="M2 6.5L0.5 4.5" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
-      <Rect x="10" y="10" width="3" height="12" rx="1" stroke={color} strokeWidth="1.5" />
-      <Line x1="10.5" y1="14" x2="12.5" y2="14" stroke={color} strokeWidth="1" opacity="0.5" />
-      <Line x1="10.5" y1="17" x2="12.5" y2="17" stroke={color} strokeWidth="1" opacity="0.5" />
-      <Line x1="10.5" y1="20" x2="12.5" y2="20" stroke={color} strokeWidth="1" opacity="0.5" />
+      <Rect x="7.5" y="10" width="3" height="12" rx="1" stroke={color} strokeWidth="1.5" />
+      <Line x1="8" y1="14" x2="10" y2="14" stroke={color} strokeWidth="1" opacity="0.5" />
+      <Line x1="8" y1="17" x2="10" y2="17" stroke={color} strokeWidth="1" opacity="0.5" />
+      <Line x1="8" y1="20" x2="10" y2="20" stroke={color} strokeWidth="1" opacity="0.5" />
     </Svg>
   );
 }

@@ -9,8 +9,10 @@ interface AuthState {
   user: User | null;
   profile: Profile | null;
   loading: boolean;
+  blockedIds: Set<string>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  refreshBlocks: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState>({
@@ -18,14 +20,17 @@ const AuthContext = createContext<AuthState>({
   user: null,
   profile: null,
   loading: true,
+  blockedIds: new Set(),
   signOut: async () => {},
   refreshProfile: async () => {},
+  refreshBlocks: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [blockedIds, setBlockedIds] = useState<Set<string>>(new Set());
 
   const fetchProfile = async (userId: string) => {
     const { data } = await supabase
@@ -34,6 +39,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq("id", userId)
       .maybeSingle();
     setProfile(data);
+  };
+
+  const fetchBlocks = async (userId: string) => {
+    // Two-way: people I block AND people who blocked me — both should be invisible to each other
+    const [blocked, blockedBy] = await Promise.all([
+      supabase.from("blocks").select("blocked_id").eq("blocker_id", userId),
+      supabase.from("blocks").select("blocker_id").eq("blocked_id", userId),
+    ]);
+    const ids = new Set<string>();
+    (blocked.data || []).forEach((r: any) => ids.add(r.blocked_id));
+    (blockedBy.data || []).forEach((r: any) => ids.add(r.blocker_id));
+    setBlockedIds(ids);
   };
 
   useEffect(() => {
@@ -50,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       if (session?.user) {
         fetchProfile(session.user.id);
+        fetchBlocks(session.user.id);
       }
       setLoading(false);
     });
@@ -68,10 +86,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       if (session?.user) {
         fetchProfile(session.user.id);
+        fetchBlocks(session.user.id);
         // Register for push notifications on sign-in
         registerForPushNotifications(session.user.id).catch(() => {});
       } else {
         setProfile(null);
+        setBlockedIds(new Set());
       }
     });
 
@@ -85,11 +105,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);
+    setBlockedIds(new Set());
   };
 
   const refreshProfile = async () => {
     if (session?.user) {
       await fetchProfile(session.user.id);
+    }
+  };
+
+  const refreshBlocks = async () => {
+    if (session?.user) {
+      await fetchBlocks(session.user.id);
     }
   };
 
@@ -100,8 +127,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: session?.user ?? null,
         profile,
         loading,
+        blockedIds,
         signOut,
         refreshProfile,
+        refreshBlocks,
       }}
     >
       {children}

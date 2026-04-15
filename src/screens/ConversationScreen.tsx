@@ -179,7 +179,7 @@ const ha = StyleSheet.create({
 export default function ConversationScreen() {
   const { params } = useRoute<Route>();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { user } = useAuth();
+  const { user, blockedIds } = useAuth();
   const { width: screenWidth } = useWindowDimensions();
   const convoId = params.conversationId;
 
@@ -274,7 +274,11 @@ export default function ConversationScreen() {
         }
       } catch {}
 
-      setMessages((msgs || []).map((m: any) => ({ ...m, reply_to_id: replyMap.get(m.id) || null, reactions: rxMap.get(m.id) || [] })));
+      setMessages(
+        (msgs || [])
+          .filter((m: any) => !blockedIds.has(m.sender_id))
+          .map((m: any) => ({ ...m, reply_to_id: replyMap.get(m.id) || null, reactions: rxMap.get(m.id) || [] }))
+      );
       await supabase.from("conversation_participants").update({ last_read_at: new Date().toISOString() }).eq("conversation_id", convoId).eq("user_id", user.id);
 
       setLoading(false);
@@ -292,7 +296,9 @@ export default function ConversationScreen() {
       if (nm && nm.length > 0) {
         setMessages((prev) => {
           const ids = new Set(prev.map((m) => m.id));
-          const fresh = nm.filter((m: any) => !ids.has(m.id)).map((m: any) => ({ ...m, reply_to_id: null, reactions: [] }));
+          const fresh = nm
+            .filter((m: any) => !ids.has(m.id) && !blockedIds.has(m.sender_id))
+            .map((m: any) => ({ ...m, reply_to_id: null, reactions: [] }));
           return fresh.length > 0 ? [...prev, ...fresh] : prev;
         });
         // inverted FlatList auto-scrolls to newest

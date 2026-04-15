@@ -2,20 +2,21 @@
   "expo": {
     "name": "Tails",
     "slug": "tails",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "scheme": "tails",
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#000000"
     },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "social.tails.app",
+      "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -35,6 +36,7 @@
       "expo-secure-store",
       "expo-web-browser",
       "expo-video",
+      "expo-apple-authentication",
       [
         "expo-notifications",
         {
@@ -50,7 +52,7 @@
     },
     "owner": "lukaspestifanos",
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/16f49f0f-93d3-4153-8697-80f0cc5e8b6b"

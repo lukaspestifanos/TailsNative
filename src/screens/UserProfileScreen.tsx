@@ -7,6 +7,7 @@ import {
   Pressable,
   RefreshControl,
   Alert,
+  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -22,7 +23,9 @@ import { timeAgo } from "../lib/formatters";
 import type { Post } from "../lib/types";
 import PostCard from "../components/PostCard";
 import EditProfileModal from "../components/EditProfileModal";
+import ReportModal from "../components/ReportModal";
 import { ProfileSkeleton } from "../components/Skeleton";
+import { MoreIcon } from "../components/Icons";
 
 type Route = RouteProp<RootStackParamList, "UserProfile">;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -76,7 +79,7 @@ function getActivityText(lastActive: string | null): { text: string; color: stri
 export default function UserProfileScreen({ overrideUsername }: { overrideUsername?: string } = {}) {
   const route = useRoute<Route>();
   const navigation = useNavigation<Nav>();
-  const { user, signOut, refreshProfile } = useAuth();
+  const { user, signOut, refreshProfile, refreshBlocks } = useAuth();
   const params = overrideUsername ? { username: overrideUsername } : route.params;
 
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -94,6 +97,11 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
 
   const [activeTab, setActiveTab] = useState<ProfileTab>("all");
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
+  const [showReport, setShowReport] = useState(false);
 
   // Enriches post rows with profiles + games + quote posts
   const enrichPosts = async (rows: any[], orderedIds?: string[]): Promise<Post[]> => {
@@ -173,11 +181,14 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
     setProfile(p);
 
     // All data in parallel
-    const [followersRes, followingRes, followCheck, postRows, likeRows, tailRows, commentRows] = await Promise.all([
+    const [followersRes, followingRes, followCheck, blockCheck, postRows, likeRows, tailRows, commentRows] = await Promise.all([
       supabase.from("follows").select("follower_id", { count: "exact", head: true }).eq("following_id", p.id),
       supabase.from("follows").select("following_id", { count: "exact", head: true }).eq("follower_id", p.id),
       user && user.id !== p.id
         ? supabase.from("follows").select("follower_id").eq("follower_id", user.id).eq("following_id", p.id).maybeSingle()
+        : Promise.resolve({ data: null }),
+      user && user.id !== p.id
+        ? supabase.from("blocks").select("blocker_id").eq("blocker_id", user.id).eq("blocked_id", p.id).maybeSingle()
         : Promise.resolve({ data: null }),
       supabase.from("posts").select("id, user_id, content, image_url, created_at, pinned_at, game_id, pick_type, pick_line, pick_odds, pick_sportsbook, pick_result, graded_at, parlay_id, quote_post_id, edited_at, original_content, comments:comments(count), likes:likes(count), tails:tails(count)").eq("user_id", p.id).order("created_at", { ascending: false }),
       supabase.from("likes").select("post_id").eq("user_id", p.id).order("created_at", { ascending: false }).limit(50),
@@ -188,6 +199,7 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
     setFollowers(followersRes.count ?? 0);
     setFollowing(followingRes.count ?? 0);
     if (followCheck.data) setIsFollowing(true);
+    setIsBlocked(!!blockCheck.data);
 
     // Own posts
     const ownPosts = await enrichPosts(postRows.data || []);
@@ -299,6 +311,109 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
   const isMe = user && profile && user.id === profile.id;
   const ringColor = profile ? getActivityRingColor(profile.last_active_at) : colors.textDim;
   const activity = profile ? getActivityText(profile.last_active_at) : null;
+
+  const handleBlock = useCallback(() => {
+    if (!user || !profile) return;
+    setShowMenu(false);
+
+    if (isBlocked) {
+      // Unblock immediately, no confirm
+      (async () => {
+        setBlockBusy(true);
+        const { error: unblockErr } = await supabase
+          .from("blocks")
+          .delete()
+          .eq("blocker_id", user.id)
+          .eq("blocked_id", profile.id);
+        if (unblockErr) {
+          Alert.alert("Error", unblockErr.message || "Failed to unblock user.");
+        } else {
+          setIsBlocked(false);
+          await refreshBlocks();
+        }
+        setBlockBusy(false);
+      })();
+      return;
+    }
+
+    Alert.alert(
+      `Block @${profile.username}?`,
+      "They won't be able to see your posts or interact with you, and their content will be hidden from your feed.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Block",
+          style: "destructive",
+          onPress: async () => {
+            setBlockBusy(true);
+            const { error: blockErr } = await supabase
+              .from("blocks")
+              .insert({ blocker_id: user.id, blocked_id: profile.id });
+            if (blockErr) {
+              Alert.alert("Error", blockErr.message || "Failed to block user.");
+              setBlockBusy(false);
+              return;
+            }
+            // Best-effort: also unfollow in both directions
+            try {
+              await supabase
+                .from("follows")
+                .delete()
+                .or(`and(follower_id.eq.${user.id},following_id.eq.${profile.id}),and(follower_id.eq.${profile.id},following_id.eq.${user.id})`);
+            } catch {}
+            setIsBlocked(true);
+            setIsFollowing(false);
+            await refreshBlocks();
+            setBlockBusy(false);
+            navigation.goBack();
+          },
+        },
+      ]
+    );
+  }, [user, profile, isBlocked, navigation, refreshBlocks]);
+
+  const handleDeleteAccount = useCallback(() => {
+    setShowEditModal(false);
+    Alert.alert(
+      "Delete Account",
+      "This will permanently delete your account, posts, comments, messages, and all associated data. This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete Account",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Are you absolutely sure?",
+              "Your account and all data will be permanently erased.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Yes, delete forever",
+                  style: "destructive",
+                  onPress: async () => {
+                    setDeleting(true);
+                    try {
+                      const { error: rpcErr } = await supabase.rpc("delete_my_account");
+                      if (rpcErr) {
+                        Alert.alert("Error", rpcErr.message || "Failed to delete account.");
+                        setDeleting(false);
+                        return;
+                      }
+                      await signOut();
+                    } catch (e: any) {
+                      Alert.alert("Error", e?.message || "Failed to delete account.");
+                      setDeleting(false);
+                    }
+                  },
+                },
+              ]
+            );
+          },
+        },
+      ]
+    );
+  }, [signOut]);
 
   const TABS: { id: ProfileTab; label: string }[] = [
     { id: "all", label: "All" },
@@ -494,12 +609,71 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
         />
       )}
 
+      {user && !isMe && (
+        <Pressable
+          style={styles.menuFab}
+          onPress={() => setShowMenu(true)}
+          hitSlop={10}
+        >
+          <MoreIcon size={20} color={colors.text} />
+        </Pressable>
+      )}
+
+      {user && !isMe && (
+        <Modal
+          visible={showMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowMenu(false)}
+        >
+          <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)}>
+            <View style={styles.menuSheet}>
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  setShowMenu(false);
+                  setShowReport(true);
+                }}
+              >
+                <Text style={styles.menuItemDanger}>Report @{profile.username}</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={handleBlock}
+                disabled={blockBusy}
+              >
+                <Text style={styles.menuItemDanger}>
+                  {blockBusy
+                    ? (isBlocked ? "Unblocking…" : "Blocking…")
+                    : (isBlocked ? `Unblock @${profile.username}` : `Block @${profile.username}`)}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => setShowMenu(false)}
+              >
+                <Text style={styles.menuItemText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Modal>
+      )}
+
       {isMe && profile && (
         <EditProfileModal
           visible={showEditModal}
           profile={profile}
           onClose={() => setShowEditModal(false)}
           onSaved={handleProfileSaved}
+          onDeleteAccount={handleDeleteAccount}
+        />
+      )}
+
+      {!isMe && profile && (
+        <ReportModal
+          visible={showReport}
+          target={{ type: "user", id: profile.id }}
+          onClose={() => setShowReport(false)}
         />
       )}
     </Wrapper>
@@ -642,4 +816,52 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: fontSize.md, color: colors.textMuted },
   notFound: { flex: 1, justifyContent: "center", alignItems: "center" },
   notFoundTitle: { fontSize: fontSize.lg, fontWeight: "600", color: colors.textMuted },
+
+  // 3-dot menu
+  menuFab: {
+    position: "absolute",
+    top: spacing.md + 4,
+    right: spacing.md,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  menuSheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xxl,
+    paddingHorizontal: spacing.md,
+    borderTopWidth: 1,
+    borderColor: colors.border,
+  },
+  menuItem: {
+    paddingVertical: spacing.md + 2,
+    alignItems: "center",
+    borderRadius: radius.md,
+  },
+  menuItemPressed: {
+    backgroundColor: colors.cardHover,
+  },
+  menuItemText: {
+    fontSize: fontSize.md,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  menuItemDanger: {
+    fontSize: fontSize.md,
+    fontWeight: "700",
+    color: colors.red,
+  },
 });

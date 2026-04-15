@@ -120,6 +120,8 @@ export interface Comment {
   parent_id: string | null;
   profiles: ProfileSummary | null;
   replies?: Comment[];
+  likes_count?: number;
+  tails_count?: number;
 }
 
 export interface Conversation {

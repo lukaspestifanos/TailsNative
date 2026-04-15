@@ -23,9 +23,11 @@ import { timeAgo, formatPickType, formatPickLabel } from "../lib/formatters";
 import { parseImageUrls } from "../lib/parseImageUrls";
 import { supabase } from "../lib/supabase";
 import { getInteraction, setInteraction } from "../lib/interactionCache";
+import { useAuth } from "../lib/AuthContext";
 import { HammerIcon, TailIcon, CommentIcon, ChevronRight, MoreIcon, ImageIcon, CloseIcon } from "./Icons";
-import { ImageCarousel, Lightbox } from "./MediaViewer";
+import { ImageCarousel, Lightbox, ImageSkeleton } from "./MediaViewer";
 import MentionText from "./MentionText";
+import ReportModal, { type ReportTarget } from "./ReportModal";
 
 interface PostCardProps {
   post: Post;
@@ -55,7 +57,9 @@ const QuoteImage = React.memo(function QuoteImage({ uri }: { uri: string }) {
     );
   }, [uri]);
 
-  if (!height) return null;
+  if (!height) {
+    return <ImageSkeleton width={QUOTE_IMAGE_WIDTH} height={200} />;
+  }
 
   return (
     <Image
@@ -104,7 +108,7 @@ const PostBody = React.memo(function PostBody({ post, onNavigate, isOwn, onMenuP
           </Pressable>
         </View>
         <Text style={styles.time}>{timeAgo(post.created_at)}</Text>
-        {isOwn && onMenuPress && (
+        {onMenuPress && (
           <Pressable onPress={onMenuPress} hitSlop={12} style={styles.menuBtn}>
             <MoreIcon size={16} color={colors.textDim} />
           </Pressable>
@@ -185,9 +189,15 @@ const PostBody = React.memo(function PostBody({ post, onNavigate, isOwn, onMenuP
 
 function PostCard({ post, onNavigate, userId: user_id, focusKey }: PostCardProps) {
   const user = user_id ? { id: user_id } : null;
+  const { blockedIds } = useAuth();
 
   const isOwn = user_id === post.user_id;
   const [deleted, setDeleted] = useState(false);
+
+  // Hide posts from blocked users (and users who blocked you)
+  // Also hide posts that quote a blocked user
+  const isBlockedAuthor = blockedIds.has(post.user_id);
+  const isQuotingBlocked = post.quote_post && blockedIds.has(post.quote_post.user_id);
 
   const cached = getInteraction(post.id);
   const [liked, setLiked] = useState(cached?.liked ?? false);
@@ -198,6 +208,9 @@ function PostCard({ post, onNavigate, userId: user_id, focusKey }: PostCardProps
   // Post menu state
   const [showPostMenu, setShowPostMenu] = useState(false);
   const postMenuAnim = useRef(new Animated.Value(0)).current;
+
+  // Report modal
+  const [showReport, setShowReport] = useState(false);
 
   // Sync from cache when returning from PostDetail (focusKey changes on screen focus)
   useEffect(() => {
@@ -462,6 +475,7 @@ function PostCard({ post, onNavigate, userId: user_id, focusKey }: PostCardProps
   };
 
   if (deleted) return null;
+  if (isBlockedAuthor || isQuotingBlocked) return null;
 
   return (
     <Pressable
@@ -484,22 +498,42 @@ function PostCard({ post, onNavigate, userId: user_id, focusKey }: PostCardProps
               ],
             },
           ]}>
-            <Pressable
-              style={({ pressed }) => [styles.postMenuItem, pressed && styles.postMenuItemPressed]}
-              onPress={handlePin}
-            >
-              <Text style={styles.postMenuText}>{post.pinned_at ? "Unpin post" : "Pin to profile"}</Text>
-            </Pressable>
-            <View style={styles.postMenuDivider} />
-            <Pressable
-              style={({ pressed }) => [styles.postMenuItem, pressed && styles.postMenuItemPressed]}
-              onPress={handleDelete}
-            >
-              <Text style={styles.postMenuTextDanger}>Delete post</Text>
-            </Pressable>
+            {isOwn ? (
+              <>
+                <Pressable
+                  style={({ pressed }) => [styles.postMenuItem, pressed && styles.postMenuItemPressed]}
+                  onPress={handlePin}
+                >
+                  <Text style={styles.postMenuText}>{post.pinned_at ? "Unpin post" : "Pin to profile"}</Text>
+                </Pressable>
+                <View style={styles.postMenuDivider} />
+                <Pressable
+                  style={({ pressed }) => [styles.postMenuItem, pressed && styles.postMenuItemPressed]}
+                  onPress={handleDelete}
+                >
+                  <Text style={styles.postMenuTextDanger}>Delete post</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable
+                style={({ pressed }) => [styles.postMenuItem, pressed && styles.postMenuItemPressed]}
+                onPress={() => {
+                  setShowPostMenu(false);
+                  setShowReport(true);
+                }}
+              >
+                <Text style={styles.postMenuTextDanger}>Report post</Text>
+              </Pressable>
+            )}
           </Animated.View>
         </>
       )}
+
+      <ReportModal
+        visible={showReport}
+        target={{ type: "post", id: post.id, authorId: post.user_id }}
+        onClose={() => setShowReport(false)}
+      />
 
       {/* Action bar */}
       <View style={styles.actions}>

@@ -21,6 +21,8 @@ import type { Post } from "../lib/types";
 import PostCard from "../components/PostCard";
 import { FeedSkeleton } from "../components/Skeleton";
 import FloatingComposeButton from "../components/FloatingComposeButton";
+import { setAppReady } from "../lib/appReady";
+import { parseImageUrls, isVideo } from "../lib/parseImageUrls";
 
 type FeedTab = "foryou" | "following";
 
@@ -215,9 +217,29 @@ export default function FeedScreen() {
     return unsubscribe;
   }, [navigation]);
 
-  // Load on mount
+  // Load on mount — prefetch first batch of images then signal app ready
   useEffect(() => {
-    fetchTab("foryou", true).then(() => setInitialLoad(false));
+    fetchTab("foryou", true).then(async () => {
+      setInitialLoad(false);
+
+      // Prefetch avatars + post images so they're cached before splash dismisses
+      try {
+        const currentPosts = cache.current.foryou.slice(0, 10);
+        const urls: string[] = [];
+        for (const p of currentPosts) {
+          if (p.profiles?.avatar_url) urls.push(p.profiles.avatar_url);
+          if (p.games?.home_logo) urls.push(p.games.home_logo);
+          if (p.games?.away_logo) urls.push(p.games.away_logo);
+          const imgs = parseImageUrls(p.image_url).filter((u) => !isVideo(u));
+          urls.push(...imgs.slice(0, 1)); // first image per post
+        }
+        if (urls.length > 0) {
+          await Promise.allSettled(urls.map((u) => Image.prefetch(u)));
+        }
+      } catch {}
+
+      setAppReady();
+    });
   }, []);
 
   const switchTab = useCallback((tab: FeedTab) => {

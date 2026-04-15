@@ -10,6 +10,7 @@ import {
   Animated,
   PanResponder,
   ActivityIndicator,
+  Easing,
 } from "react-native";
 import { Image } from "expo-image";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -127,6 +128,37 @@ export function DetailVideoPlayer({ url }: { url: string }) {
   );
 }
 
+// ─── Skeleton shimmer placeholder ───
+
+function ImageSkeleton({ width, height }: { width: number; height: number }) {
+  const shimmer = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(shimmer, {
+        toValue: 1,
+        duration: 1200,
+        easing: Easing.inOut(Easing.ease),
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
+
+  const opacity = shimmer.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.3, 0.6, 0.3],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        styles.skeleton,
+        { width, height, borderRadius: radius.lg, opacity },
+      ]}
+    />
+  );
+}
+
 // ─── Single image that measures its own aspect ratio ───
 
 // Matches web's max-h-72 (288px) + object-contain
@@ -159,10 +191,12 @@ function AspectImage({
     );
   }, [uri]);
 
-  const imgWidth = dims?.w ?? 0;
-  const height = dims?.h ?? 0;
+  const imgWidth = dims?.w ?? cardWidth;
+  const height = dims?.h ?? 200;
 
-  if (!dims) return null;
+  if (!dims) {
+    return <ImageSkeleton width={cardWidth} height={200} />;
+  }
 
   return (
     <Pressable onPress={onPress} style={[styles.aspectWrap, { width: imgWidth, alignSelf: "flex-start" }]}>
@@ -375,7 +409,12 @@ export function Lightbox({ urls, startIndex, visible, onClose }: LightboxProps) 
   );
 }
 
+export { ImageSkeleton };
+
 const styles = StyleSheet.create({
+  skeleton: {
+    backgroundColor: colors.cardHover,
+  },
   videoWrap: {
     alignSelf: "flex-start",
     borderRadius: radius.lg,
