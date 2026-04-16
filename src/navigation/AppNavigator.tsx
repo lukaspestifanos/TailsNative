@@ -23,6 +23,7 @@ import OnboardingScreen from "../screens/OnboardingScreen";
 import ComposeScreen from "../screens/ComposeScreen";
 import NewConversationScreen from "../screens/NewConversationScreen";
 import FollowListScreen from "../screens/FollowListScreen";
+import NotificationSettingsScreen from "../screens/NotificationSettingsScreen";
 
 // Type definitions for navigation
 export type RootStackParamList = {
@@ -38,6 +39,7 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Compose: { gameId?: string } | undefined;
   NewConversation: undefined;
+  NotificationSettings: undefined;
 };
 
 export type TabParamList = {
@@ -270,6 +272,18 @@ export default function AppNavigator() {
               headerShown: false,
               animation: "slide_from_bottom",
               presentation: "modal",
+            }}
+          />
+          <Stack.Screen
+            name="NotificationSettings"
+            component={NotificationSettingsScreen}
+            options={{
+              headerShown: true,
+              headerTitle: "Notifications",
+              headerStyle: { backgroundColor: colors.bg },
+              headerTintColor: colors.text,
+              headerShadowVisible: false,
+              headerBackTitle: "",
             }}
           />
           <Stack.Screen

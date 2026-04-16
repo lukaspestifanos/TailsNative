@@ -506,6 +506,12 @@ export default function UserProfileScreen({ overrideUsername }: { overrideUserna
               <Text style={styles.editProfileBtnText}>Edit Profile</Text>
             </Pressable>
             <Pressable
+              onPress={() => navigation.navigate("NotificationSettings")}
+              style={styles.signOutBtn}
+            >
+              <Text style={[styles.signOutBtnText, { color: colors.text }]}>Notifications</Text>
+            </Pressable>
+            <Pressable
               onPress={() => {
                 Alert.alert("Sign Out", "Are you sure?", [
                   { text: "Cancel", style: "cancel" },

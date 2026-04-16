@@ -30,6 +30,7 @@ function AppInner() {
 
       switch (data.type) {
         case "game_alert":
+        case "game_final":
           if (data.gameId) navigationRef.current?.navigate("GameDetail", { gameId: data.gameId as string });
           break;
         case "like":
@@ -42,6 +43,9 @@ function AppInner() {
           break;
         case "message":
           if (data.conversationId) navigationRef.current?.navigate("Conversation", { conversationId: data.conversationId as string });
+          break;
+        case "wager_result":
+          // Deep link to wager detail — handled via web for now
           break;
       }
     });

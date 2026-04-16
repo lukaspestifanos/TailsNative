@@ -151,6 +151,7 @@ export default function GameDetailScreen() {
     try {
       // Try today's API first
       const res = await fetch(`${API_BASE}/api/games/today?_t=${Date.now()}`);
+      let found: any = null;
       if (res.ok) {
         const data = await res.json();
         const all = [
@@ -158,20 +159,73 @@ export default function GameDetailScreen() {
           ...(data.mlb || []), ...(data.ncaam || []),
           ...(data.mma || []), ...(data.soccer || []), ...(data.tennis || []),
         ];
-        const found = all.find((g: any) => g.id === gameId);
+        found = all.find((g: any) => g.id === gameId);
         if (found) { setGame(found); gameRef.current = found; }
       }
 
-      // If game is live/known but wasn't in today's API, poll ESPN directly
+      // If not found in today's API, try to resolve from ESPN directly using the gameId format
+      // gameId format: "league_espn_12345" (e.g. "nba_espn_401234567")
+      if (!found && !gameRef.current) {
+        const parts = gameId.split("_");
+        const espnId = parts[parts.length - 1];
+        // Derive league from the gameId prefix
+        const prefix = parts[0]?.toLowerCase();
+        const leagueFromPrefix: Record<string, string> = {
+          nba: "NBA", mlb: "MLB", nhl: "NHL", ncaam: "NCAAM",
+          ufc: "UFC", pfl: "PFL", bellator: "Bellator",
+          premierleague: "Premier League", mls: "MLS",
+        };
+        const league = leagueFromPrefix[prefix] || "NBA";
+        const sbUrl = getScoreboardUrl(league);
+
+        if (sbUrl && espnId) {
+          // Try today and yesterday
+          for (const offset of [0, -1]) {
+            try {
+              const d = new Date(Date.now() + offset * 24 * 60 * 60 * 1000);
+              const dateStr = d.toISOString().slice(0, 10).replace(/-/g, "");
+              const espnRes = await fetch(`${sbUrl}?dates=${dateStr}`);
+              if (!espnRes.ok) continue;
+              const espnData = await espnRes.json();
+              for (const event of espnData.events || []) {
+                if (event.id === espnId) {
+                  const comp = event.competitions?.[0];
+                  const home = comp?.competitors?.find((c: any) => c.homeAway === "home");
+                  const away = comp?.competitors?.find((c: any) => c.homeAway === "away");
+                  const resolved: GameData = {
+                    id: gameId,
+                    league,
+                    home_team: home?.team?.displayName || "TBD",
+                    away_team: away?.team?.displayName || "TBD",
+                    home_logo: home?.team?.logo || null,
+                    away_logo: away?.team?.logo || null,
+                    score_home: parseInt(home?.score || "0"),
+                    score_away: parseInt(away?.score || "0"),
+                    start_time: event.date,
+                    status: event.status?.type?.completed ? "final" : event.status?.type?.state === "in" ? "live" : "scheduled",
+                    period: event.status?.period || undefined,
+                    clock: event.status?.displayClock || undefined,
+                  };
+                  setGame(resolved);
+                  gameRef.current = resolved;
+                  found = resolved;
+                  break;
+                }
+              }
+              if (found) break;
+            } catch {}
+          }
+        }
+      }
+
+      // If game is live, poll ESPN directly for latest scores
       if (gameRef.current && gameRef.current.status === "live") {
         const parts = gameId.split("_");
         const espnId = parts[parts.length - 1];
         const sbUrl = getScoreboardUrl(gameRef.current.league);
         if (sbUrl && espnId) {
-          const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-          const dateStr = yesterday.toISOString().slice(0, 10).replace(/-/g, "");
           try {
-            const espnRes = await fetch(`${sbUrl}?dates=${dateStr}`);
+            const espnRes = await fetch(`${sbUrl}`);
             if (espnRes.ok) {
               const espnData = await espnRes.json();
               for (const event of espnData.events || []) {
